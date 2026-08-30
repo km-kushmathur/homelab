@@ -1,0 +1,16 @@
+# One-shot storage check, driven by storage-watchdog.timer.
+# Install to /etc/systemd/system/storage-watchdog.service on the hypervisor host.
+#
+# flock ensures a slow recovery run (stopping containers, cycling the mount)
+# never overlaps with the next timer firing.
+#
+# See docs/setup/09-storage-watchdog.md.
+
+[Unit]
+Description=Homelab storage mount watchdog
+After=local-fs.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/homelab/homelab.env
+ExecStart=/usr/bin/flock -n /run/storage-watchdog.lock /opt/homelab/scripts/check_storage.sh

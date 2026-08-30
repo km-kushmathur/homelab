@@ -1,0 +1,22 @@
+# Fires the storage watchdog every 15 seconds.
+# Install to /etc/systemd/system/storage-watchdog.timer on the hypervisor host.
+#
+#   systemctl daemon-reload
+#   systemctl enable --now storage-watchdog.timer
+#   systemctl list-timers storage-watchdog.timer
+#
+# 15s is deliberately aggressive: an unmounted media path lets containers write
+# to the host root disk, so the window between failure and detection should be
+# as small as the check is cheap.
+
+[Unit]
+Description=Run the homelab storage watchdog every 15 seconds
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=storage-watchdog.service
+
+[Install]
+WantedBy=timers.target

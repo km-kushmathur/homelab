@@ -1,0 +1,14 @@
+# Example /etc/fstab on the hypervisor host.
+#
+# Get your own UUIDs with:  blkid
+#
+# `nofail` on the media disk is the critical option: without it, a disk that is
+# absent or slow to enumerate at boot drops the host into emergency mode
+# instead of booting normally. See docs/setup/02-storage.md.
+
+# <file system>            <mount point>  <type>  <options>            <dump> <pass>
+/dev/pve/root              /              ext4    errors=remount-ro    0      1
+UUID=<EFI_PARTITION_UUID>  /boot/efi      vfat    defaults             0      1
+/dev/pve/swap              none           swap    sw                   0      0
+proc                       /proc          proc    defaults             0      0
+UUID=<DATA_DISK_UUID>      /mnt/media     ext4    defaults,nofail      0      0

@@ -1,0 +1,124 @@
+version: "3.9"
+
+# Reference compose for the media-stack container host.
+# Runtime appdata directories are intentionally excluded from Git.
+# Copy .env.example to .env alongside this file before running docker compose.
+
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "${DOWNLOADER_WEBUI_PORT}:${DOWNLOADER_WEBUI_PORT}"
+      - "6881:6881"
+      - "6881:6881/udp"
+    environment:
+      TZ: "${TZ}"
+      VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER}"
+      VPN_TYPE: "${VPN_TYPE}"
+      WIREGUARD_PRIVATE_KEY: "${WIREGUARD_PRIVATE_KEY}"
+      SERVER_COUNTRIES: "${SERVER_COUNTRIES}"
+      FIREWALL: "${FIREWALL}"
+      DOT: "${DOT}"
+    volumes:
+      - "${GLUETUN_CONFIG_DIR}:/gluetun"
+
+  downloader:
+    image: "${DOWNLOADER_IMAGE:-lscr.io/linuxserver/sabnzbd:latest}"
+    container_name: downloader
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+      WEBUI_PORT: "${DOWNLOADER_WEBUI_PORT}"
+    volumes:
+      # The download client, Radarr and Sonarr must all mount the same host path at /media.
+      # Do not drift to /data or any other mapping or hardlinks will break.
+      - "${DOWNLOADER_CONFIG_DIR}:/config"
+      - "${MEDIA_ROOT}:/media"
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    ports:
+      - "${RADARR_PORT}:7878"
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - "${RADARR_CONFIG_DIR}:/config"
+      - "${MEDIA_ROOT}:/media"
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    ports:
+      - "${SONARR_PORT}:8989"
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - "${SONARR_CONFIG_DIR}:/config"
+      - "${MEDIA_ROOT}:/media"
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    restart: unless-stopped
+    ports:
+      - "${PROWLARR_PORT}:9696"
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - "${PROWLARR_CONFIG_DIR}:/config"
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    ports:
+      - "${FLARESOLVERR_PORT}:8191"
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL}"
+      LOG_HTML: "${LOG_HTML}"
+      CAPTCHA_SOLVER: "${CAPTCHA_SOLVER}"
+      TZ: "${TZ}"
+
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    restart: unless-stopped
+    ports:
+      - "${JELLYSEERR_PORT}:5055"
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL}"
+      TZ: "${TZ}"
+    volumes:
+      - "${JELLYSEERR_CONFIG_DIR}:/app/config"
+
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ}"
+      NTFY_UPSTREAM_BASE_URL: "${NTFY_UPSTREAM_BASE_URL}"
+      NTFY_BASE_URL: "${NTFY_BASE_URL}"
+    ports:
+      - "${NTFY_PORT}:80"
+    command: serve

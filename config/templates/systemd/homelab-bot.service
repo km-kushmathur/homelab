@@ -1,0 +1,25 @@
+# Discord bridge + SRE agent daemon.
+# Install to /etc/systemd/system/homelab-bot.service on the hypervisor host.
+#
+#   systemctl daemon-reload
+#   systemctl enable --now homelab-bot.service
+#
+# See docs/setup/10-discord-agent.md.
+
+[Unit]
+Description=Homelab Discord bridge and SRE agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/homelab/homelab.env
+WorkingDirectory=/opt/homelab
+ExecStart=/opt/homelab/.venv/bin/python /opt/homelab/scripts/discord_bridge.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

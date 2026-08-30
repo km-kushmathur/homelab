@@ -1,0 +1,27 @@
+# Reference WireGuard profile for Gluetun.
+#
+# Most commercial VPN providers let you generate a WireGuard config from their
+# dashboard. Download yours, then map the values into `.env` as
+# WIREGUARD_PRIVATE_KEY / SERVER_COUNTRIES rather than mounting this file --
+# Gluetun reads its configuration from environment variables.
+#
+# This file is kept as an annotated reference so you can see which fields of a
+# provider-issued profile matter and which Gluetun derives on its own.
+#
+# Security notes:
+# - Gluetun enforces a kill-switch firewall. If the tunnel drops, egress is
+#   blocked rather than silently falling back to your ISP connection.
+# - DNS is forced through the tunnel's resolver to reduce leak risk.
+# - Never commit a real profile. This file is an example; the real one is
+#   covered by .gitignore.
+
+[Interface]
+PrivateKey = <YOUR_WIREGUARD_PRIVATE_KEY>
+Address = 10.2.0.2/32
+DNS = 10.2.0.1
+
+[Peer]
+PublicKey = <SERVER_PUBLIC_KEY>
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = <VPN_SERVER_ENDPOINT>:51820
+PersistentKeepalive = 25

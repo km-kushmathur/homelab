@@ -1,0 +1,46 @@
+// Tailnet ACL policy for the homelab.
+//
+// Replace the example addresses with your own. Deploy from the Tailscale admin
+// console under Access Controls, or with the Tailscale GitHub Action.
+//
+// Model: one admin identity with full reach, one member identity restricted to
+// exactly the two user-facing services and nothing else.
+{
+	"groups": {
+		"group:admin":  ["admin@example.com"],
+		"group:member": ["member@example.com"],
+	},
+
+	"tagOwners": {
+		"tag:homelab": ["group:admin"],
+	},
+
+	"acls": [
+		{
+			// Admin can reach everything on the tailnet.
+			"action": "accept",
+			"src":    ["group:admin"],
+			"dst":    ["*:*"],
+		},
+		{
+			// Members reach only the media server and the request portal.
+			// Add no wildcards here -- that is the entire point of this policy.
+			"action": "accept",
+			"src":    ["group:member"],
+			"dst": [
+				"192.168.1.11:8096",
+				"192.168.1.14:5055",
+			],
+		},
+	],
+
+	"ssh": [
+		{
+			// SSH is gated behind a check (re-authentication), not open accept.
+			"action": "check",
+			"src":    ["group:admin"],
+			"dst":    ["tag:homelab"],
+			"users":  ["root", "autogroup:nonroot"],
+		},
+	],
+}
