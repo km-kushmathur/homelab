@@ -13,6 +13,7 @@ graph TB
     SON["<b>sonarr</b><br/>series"]
     PROW["<b>prowlarr</b><br/>indexer manager"]
     FLARE["<b>flaresolverr</b><br/>challenge solver"]
+    BAZ["<b>bazarr</b><br/>subtitles"]
     NTFY["<b>ntfy</b><br/>push notifications"]
 
     subgraph vpn["network namespace: gluetun"]
@@ -22,6 +23,7 @@ graph TB
 
     SEERR --> RAD & SON
     RAD & SON --> PROW
+    RAD & SON --> BAZ
     PROW -.-> FLARE
     RAD & SON --> DL
     GLU --> WAN(["internet"])

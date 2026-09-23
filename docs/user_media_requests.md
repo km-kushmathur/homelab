@@ -51,5 +51,5 @@ Open the web portal at `http://192.168.1.14:5055`:
 ## Operational Notes
 
 - Verify progress with `/status` before re-requesting media.
-- Large releases and full TV seasons require extended download times depending on seeders.
+- Large releases and full TV seasons require extended download times depending on available sources.
 - For stalled items, note the title and requested quality profile when contacting the system administrator.

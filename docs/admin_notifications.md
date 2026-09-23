@@ -1,106 +1,115 @@
-# Push Notifications Reference
+# Push Notifications Reference & 3-Tier Architecture
 
 ## Overview
 
 The stack pushes alerts via [ntfy](https://ntfy.sh), an HTTP-based publish-subscribe notification service. Services publish events directly to a configured topic, and the Discord bridge subscribes to mirror alerts into the ops channel.
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant S as Request portal /<br/>Radarr / Sonarr
-    participant N as ntfy
-    participant P as Phone
-    participant B as Discord bridge
-    participant O as Ops channel
-
-    S->>N: POST to configured topic
-    par push to device
-        N-->>P: notification
-    and stream to bridge
-        N-->>B: JSON stream (long poll)
-        B->>B: format as an embed
-        B-->>O: post, mentioning the operator
+flowchart TD
+    subgraph SRE_Plane["Notification Architecture"]
+        CRIT["P1: Critical Outage / Blocker\n• Storage full (< 15 GB free)\n• Media mount dropped\n• VPN tunnel dead"] -->|Loud Ping + Push Notification| OP1["#ops channel (Loud Alert)"]
+        REQ["P2: User Requests & Milestones\n• New request submitted\n• Full season/movie imported\n• Request cancelled"] -->|Silent Embed • No @ mention| OP2["#ops channel (Silent Embed)"]
+        GRAB["P3: Plumbing / Routine\n• Routine download started\n• Release retries\n• Auto-remediations"] -->|Quiet Logs / arr_cli| OP3["arr_cli.py & /status only"]
     end
 ```
 
 > **Security notice:** Public ntfy topics do not require authentication; access is restricted solely by topic entropy. Generate a cryptographically random topic name (`openssl rand -hex 12`) and store it exclusively in `/etc/homelab/homelab.env`.
 
-## Request Portal Configuration
+---
+
+### Tier Matrix
+
+| Tier | Events | Destination | Mentions / Push | Format |
+|---|---|---|---|---|
+| **P1: Critical Outage / Blocker** | • Host media storage unmounted (`${MEDIA_ROOT}`)<br>• Storage full (< 15 GB free)<br>• VPN tunnel dead<br>• Arr service crash loop | Ops channel + ntfy (High Priority) | **Tags Administrator** + Loud Mobile Push | Actionable alert embed (`🚨 Storage Capacity Alert`) with user, media, remaining headroom, and remediation steps |
+| **P2: User Requests & Lifecycle** | • New Jellyseerr request submitted<br>• User cancellation<br>• Watchdog notice (no sources found)<br>• Season / Movie fully imported | Ops channel (Silent) + ntfy (Low Priority) | **No `@` tag** (Silent Embed) | Compact summary embed with requesting user, title, size, and pipeline status |
+| **P3: Ephemeral Plumbing & Background Jobs** | • Routine download started<br>• Queue auto-remediations (stalled items swapped)<br>• Prowlarr indexer backoff auto-resets | Logged only (or debounced single summary) | **Zero pings / No ntfy** | Tracked via `/status` and `arr_cli.py queue` |
+
+---
+
+## Household User Experience (Personal Request Channels & DMs)
+
+Users receive only actionable lifecycle milestones:
+1. **Intake Confirmation:** Immediate embed when they hit `/request` with estimated size and ETA.
+2. **Storage Full Notice (Pre-Flight Gate):** If free space on `${MEDIA_ROOT}` is below 15 GB, the request confirmation view displays an orange notice explaining that storage is temporarily full and directs the user to contact the administrator to free up space.
+3. **Watchdog Search Notice (Fallback):** If the autonomous watchdog detects a stalled release and finds that all available indexer releases have 0 sources, the user receives a private notice in their personal request channel:
+   > ⚠️ **Download Notice: [Title]**  
+   > Our automated watchdog checked all indexers, but could not find an active release with available sources. The system will keep monitoring in case a fresh copy becomes available.
+4. **Ready to Stream:** When Jellyfin finishes library import, posts a clean `🍿 <Title> is ready to watch!` with a direct stream link.
+5. *Suppressed:* Users never see raw speeds, download hashes, indexer queries, or internal retry attempts.
+
+---
+
+## Operator SRE Plane (Ops Channel & Mobile Alerts)
+
+- **Noise Suppression & Debouncing:**
+  - `ntfy_event_listener_loop` debounces bursts of notifications (e.g. multi-episode season packs) within a 25-second window so only a single summary card is posted.
+  - Routine requests and cancellations post silent rich embeds without `@operator` pings.
+- **Critical Alerts:**
+  - Storage full (< 15 GB free) and drive unmount events trigger loud alerts with operator mentions.
+
+---
+
+## Jellyseerr Configuration
 
 Configure in Jellyseerr under **Settings → Notifications → ntfy.sh**:
 
 | Field | Value |
 | :--- | :--- |
 | Server URL | `https://ntfy.sh` (or self-hosted URL) |
-| Topic | Configured topic string |
+| Topic | Configured topic string (`NTFY_TOPIC`) |
 
-Triggers:
+**Triggers to enable:**
 - Request Automatically Approved
 - Request Pending Approval *(optional; omit if auto-approval is enabled)*
 
+---
+
 ## Radarr and Sonarr Configuration
 
-Configure in Radarr and Sonarr under **Settings → Connect → + → ntfy**:
+To prevent season-pack notification floods (e.g. 10–24 pushes for a single TV season), **"On Grab" alerts are disabled** in Radarr and Sonarr under **Settings → Connect**.
 
 | Field | Value |
 | :--- | :--- |
-| Trigger | On Grab |
+| Connection Type | ntfy |
+| Trigger | On Import (Optional) / Off for On Grab |
 | Server URL | `https://ntfy.sh` |
-| Topic | Configured topic string |
+| Topic | Configured topic string (`NTFY_TOPIC`) |
 | Click Action URL | `http://192.168.1.14:8080` |
 
-> **Note:** Radarr and Sonarr ntfy integrations send fixed templates that omit download size. The click action URL directs to the download client web UI to view active transfer metrics.
-
-## Example notification
-
-What a grab alert and a request alert look like on arrival:
-
-```text
-┌──────────────────────────────────────────────┐
-│ Radarr — Movie Grabbed              6:42 PM  │
-│ Example Title (2024) [1080p]                 │
-├──────────────────────────────────────────────┤
-│ Request Automatically Approved      6:42 PM  │
-│ Example Title (2024)                         │
-│                                              │
-│ Requested By: <member>                       │
-│ Request Status: Processing                   │
-└──────────────────────────────────────────────┘
-```
+---
 
 ## Self-hosting ntfy
 
 The compose stack includes an ntfy container. Self-hosting keeps notification
-metadata off a third-party server; the tradeoff is that iOS push requires
-handing instant notifications upstream anyway.
+metadata off a third-party server; the tradeoff is that mobile push notifications
+require handing instant notifications upstream anyway.
 
 > **`NTFY_BASE_URL` and `NTFY_UPSTREAM_BASE_URL` must be set together.** If
 > `NTFY_UPSTREAM_BASE_URL` is set to forward instant notifications for mobile
 > clients, but `NTFY_BASE_URL` is left undefined, ntfy fails its startup
 > validation and the container crash-loops. Set both in `.env` before deploying.
 
+---
+
 ## Troubleshooting
 
-**Nothing arrives on the phone.**
-
-1. Confirm the app is installed and subscribed to the exact topic string —
-   these are case-sensitive and a typo fails silently.
+### Notifications not arriving on mobile device
+1. Confirm the app is installed and subscribed to the exact topic string (`NTFY_TOPIC`) — these are case-sensitive and a typo fails silently.
 2. Check the OS notification permission for the ntfy app.
 3. Confirm the server URL matches exactly, with no trailing slash.
 4. Test the path independently of the applications:
    ```bash
    curl -d "test from the homelab" https://ntfy.sh/<your-topic>
    ```
-   If that arrives and application alerts do not, the problem is the
-   application's connection config, not ntfy.
+   If that arrives and application alerts do not, the problem is the application's connection config, not ntfy.
 
-**Grab alerts arrive but show no size.** Expected — see the note above.
+### Watchdog auto-remediation alerting
+- State tracking lives at `/opt/homelab/.arr_remediation_state.json`.
+- When testing or inspecting remediation attempts:
+  ```bash
+  python3 /opt/homelab/scripts/arr_cli.py --json queue auto-remediate
+  ```
 
-**The self-hosted container crash-loops on start.** Almost always the
-`NTFY_BASE_URL` / `NTFY_UPSTREAM_BASE_URL` pairing described above. Confirm with
-`docker logs ntfy`.
-
-**Alerts reach the phone but not the Discord ops channel.** The bridge streams
-from `NTFY_STREAM_URL`, which is a different variable from the one the
-applications use, and it must point at the JSON endpoint:
-`https://ntfy.sh/<your-topic>/json`. Check `journalctl -u homelab-bot -n 50`.
+### Alerts reach phone but not the Discord ops channel
+The bridge streams from `NTFY_STREAM_URL`, which is a different variable from the one the applications use, and it must point at the JSON endpoint: `https://ntfy.sh/<your-topic>/json`. Check `journalctl -u homelab-bot -n 50`.

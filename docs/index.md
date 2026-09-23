@@ -34,8 +34,10 @@ Document conventions:
 - [admin_jellyfin_plugins.md](admin_jellyfin_plugins.md) — Jellyfin plugin installation and safe restart procedure
 - [admin_manual_media_transfer.md](admin_manual_media_transfer.md) — Manual file transfer and library ingestion
 - [admin_notifications.md](admin_notifications.md) — Push notification pipeline and event routing
+- [admin_storage_capacity.md](admin_storage_capacity.md) — Storage capacity pre-flight gate, safe pruning, and sizing guidelines
 - [admin_storage_recovery.md](admin_storage_recovery.md) — Manual recovery from dropped mounts or stale file handles
 - [admin_storage_watchdog.md](admin_storage_watchdog.md) — Storage watchdog configuration and operation
+- [admin_subtitles.md](admin_subtitles.md) — Automated English subtitle architecture, Bazarr integration, and sync engine
 - [admin_tailscale_network.md](admin_tailscale_network.md) — Tailscale ACL configuration and network security model
 
 ## User Guides

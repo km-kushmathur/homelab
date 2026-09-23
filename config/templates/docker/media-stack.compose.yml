@@ -122,3 +122,17 @@ services:
     ports:
       - "${NTFY_PORT}:80"
     command: serve
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    restart: unless-stopped
+    ports:
+      - "${BAZARR_PORT:-6767}:6767"
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - "${BAZARR_CONFIG_DIR}:/config"
+      - "${MEDIA_ROOT}:/media"

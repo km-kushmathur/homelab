@@ -43,6 +43,7 @@ graph TB
         SON["sonarr"]
         PROW["prowlarr"]
         SEERR["jellyseerr<br/><i>request portal</i>"]
+        BAZ["bazarr<br/><i>subtitles</i>"]
     end
 
     USERS(["household"]) --> BOT

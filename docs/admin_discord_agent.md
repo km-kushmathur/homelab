@@ -4,168 +4,150 @@ Architecture and operational runbook for [`scripts/discord_bridge.py`](../script
 
 Setup instructions: [setup/10-discord-agent.md](setup/10-discord-agent.md).
 
-> **Security notice:** The bridge runs with host-level privileges and invokes an agent CLI with automated execution. Access must be strictly restricted to trusted administrative Discord roles.
-> Credentials reside in `/etc/homelab/homelab.env` (mode `0600`) and are untracked in version control.
+> 🛑 **Security Architecture & Role Management Policy:**
+> - **Role Management by Admins:** Homelab Admins are authorized to grant, assign, and revoke Discord roles (such as `Operator`, `Admin`, or member roles) for server members via `/role grant/revoke`, `!role grant/revoke`, or `python3 /opt/homelab/scripts/arr_cli.py discord-role grant/revoke`.
+> - **Permanent Owner Immutability Rule:** The Homelab Owner (`OWNER_DISCORD_ID`) is permanently exempt, untouchable, and immutable. Under NO circumstances may ANY user (Admin or Operator), agent command, or script grant, revoke, modify, strip, elevate, or tamper with the Owner's roles, permissions, channel overwrites, or status. Any attempt to touch the Owner's roles or permissions is immediately and unconditionally refused and alerted to the ops channel.
+> - **Operator Zero-Escalation:** The `Operator` role holds `permissions: 0` on Discord. Operators in `#sudo-ops` remain strictly prohibited from managing roles, escalating privileges, editing channels, or granting permissions.
+> - **Channel Privacy:** Operators have zero visibility into any other user's private media request channel (`#req-<username>`) and cannot access the admin `#ops` channel.
+> - **Hard Guardrails:** The bridge gateway rejects any command from an Operator in `#sudo-ops` that attempts to alter roles, elevate privileges, modify permissions, or expose credentials.
 
-## System Architecture
+> ℹ️ **Note:** The Discord bot token and service credentials live securely in `/etc/homelab/homelab.env` (mode `0600`) and are untracked in version control.
 
-```mermaid
-graph TB
-    G(["Discord server"])
+---
 
-    subgraph house["Household plane"]
-        RC["private channels<br/><code>#req-username</code><br/><i>and DMs</i>"]
-        C1["<code>/request</code>"]
-        C2["<code>/status</code>"]
-        C3["<code>/open-channel</code>"]
-    end
+## Dual-Plane Architecture
 
-    subgraph op["Operator plane &mdash; admin role required"]
-        OC["ops channel"]
-        C4["<code>!agent</code> / <code>/agent</code>"]
-    end
-
-    G --> house & op
-    RC --> C1 & C2 & C3
-    OC --> C4
-
-    C1 & C2 --> CLI["arr_cli.py"]
-    C4 --> AG["agent CLI<br/><i>grounded on the repo</i>"]
-    AG --> HOST["hypervisor"]
-    CLI --> SVC["Jellyseerr &middot; Radarr &middot; Sonarr<br/>Prowlarr &middot; download client &middot; Jellyfin"]
-
-    house -.->|"agent commands refused here"| op
-
-    style op stroke-width:2px
+```
+                                    +------------------------------------------+
+                                    |               Discord Guild              |
+                                    +------------------------------------------+
+                                         /                                  \
+                                        /                                    \
+                                       v                                      v
+                 +--------------------------------------+      +--------------------------------------+
+                 |        Household Intake Plane        |      |          Operator SRE Plane          |
+                 | (Private Channels under Category/DM) |      |         (#ops / #sudo-ops)           |
+                 +--------------------------------------+      +--------------------------------------+
+                     |              |              |                              |
+                     v              v              v                              v
+               /open-channel    /request        /status                    !agent  /  /agent
+                     |              |              |                              |
+                     |              |              |                              v
+                     |              |              |                  +-----------------------+
+                     |              |              |                  |       Agent CLI       |
+                     |              |              |                  |  (Grounded Workspace) |
+                     |              |              |                  +-----------------------+
+                     v              v              v                              |
+           +-----------------------------------------------+                      v
+           |             Arr CLI Helper Script             |             Hypervisor Host
+           |         (/opt/homelab/scripts/arr_cli.py)     |
+           +-----------------------------------------------+
+                 |              |              |
+                 v              v              v
+             Jellyseerr       Radarr         Sonarr
+             (Port 5055)   (Port 7878)    (Port 8989)
 ```
 
 Plane separation is strictly enforced: agent commands are rejected in household channels, and household interactions respond ephemerally to avoid leaking infrastructure details.
 
-## Household Plane
+---
 
-### `/open-channel`
+## Household Intake Commands
 
-Provisions a private `#req-<username>` channel under the media requests category. `@everyone` view and send permissions are denied; only the requesting user, the bot, and administrators have access. A pinned onboarding message provides usage instructions.
+### 1. `/open-channel`
+- **Purpose:** On-demand provisioning of a private personal media request channel for existing server members.
+- **Location:** Created under the configured media requests category.
+- **Channel Format:** `#req-<username>` (e.g. `#req-alice`).
+- **Permissions:** Private (`@everyone` denied view/send; target user granted full interaction rights; bot and admin full access).
+- **Onboarding:** Pins a welcome guide explaining how to search and request media.
 
-### Auto-Provisioning on Join
+### 2. Auto-Provisioning (`on_member_join`)
+- Automatically creates the private request channel and sends a direct welcome DM whenever a new member joins the server.
 
-`on_member_join` automatically creates the private request channel for new guild members and sends a welcome direct message.
+### 3. `/request <title>`
+- Performs catalogue search and gates download behind user confirmation.
+- **Query parsing:** Resolution tags (`4k`, `1080p`, `720p`, `uhd`, `hdr`, `remux`, `bluray`, `web-dl`), media-type hints, and season tokens (`season 2`, `s02`) are extracted from free-text queries to determine intent while keeping catalogue searches clean.
+- **Ranking:** Scored by popularity, vote count, title match, and release year.
+- **Release sizing:** Computes runtime-based size estimates (`1080p`: ~35-75 MB/min, `4K`: ~100-185 MB/min).
+- **Storage Pre-Flight Gate (15 GB Buffer):** Verifies free space on `${MEDIA_ROOT}`. If available space is below 15 GB, download confirmation is blocked, an explanatory card is shown, and a P1 Critical Alert is posted to the ops channel.
+- **In-Theatres / CAM Gating:** Releases that are still in theatres without an official digital release are flagged. Users are informed that only theatre recordings exist and instructed to contact an administrator for manual review.
 
-### `/request <title>`
+### 4. `/status [user]`
+- **User Scope:** In `#req-<user>` channels and DMs, strictly isolates results to the calling user's media. In `#ops`, defaults to all-users with deduplication and requester tags, with an optional user filter.
+- **Visual Feedback:** Visual ASCII progress bars (`████░░░░░░`), ETAs, request timestamps (`• <t:timestamp:R>`), and current pipeline states.
+- **Pipeline Details Inspector:** Interactive `🔍 See Details` button displays live 5-stage tracking:
+  ```text
+  [Jellyseerr] ➔ [Radarr/Sonarr] ➔ [Download Client] ➔ [Import] ➔ [Jellyfin]
+  ```
+  with exact submission timestamps, transfer speeds, sources, and Jellyfin web links.
 
-Performs catalogue search and gates download behind user confirmation. All responses are ephemeral.
+### 5. `/cancel [title]`
+- **Strict User Scoping:** Users and admins can only view and cancel their own active in-progress requests.
+- **Safety Gate:** Rejects cancellations for media that has already finished downloading and imported into Jellyfin.
+- **Autocomplete & Selection:** Autocompletes active in-progress downloads, with an interactive confirmation view.
+- **Clean Teardown:** Deletes Jellyseerr request, removes queue items from Radarr/Sonarr, and purges incomplete files from the download client.
 
-**Query parsing:** Resolution tags (`4k`, `1080p`, `720p`, `uhd`, `hdr`, `remux`, `bluray`, `web-dl`), media-type hints, and season tokens (`season 2`, `s02`) are extracted from free-text queries to determine intent while keeping catalogue searches clean.
+### 6. `/history`
+- Interactive request history view displaying past media requests, approval statuses, completion dates, and requester info.
 
-**Ranking:** Results are scored by popularity, vote count, title match, and release year.
+### 7. `/imar`
+- Harmless, humorous easter egg slash/prefix command that playfully roasts users for expecting dummy commands to do anything.
 
-**Type scoping:** Film queries return movie releases; TV queries return series and season selections.
+---
 
-**Release sizing:** Provides initial runtime-based size estimates. `🔍 Interactive Release Search` queries Prowlarr on demand (40s timeout) to aggregate real indexer releases by quality tier:
+## Operator SRE Plane
 
-```text
-• 2160p 4K UHD:  min – max GB   (avg X GB, N results)
-• 1080p FHD:     min – max GB   (avg X GB, N results)
-• 720p HD:       min – max GB   (avg X GB, N results)
-```
+### Channel Scoping & Privilege Tiers
+- **Admin Control Plane (`#ops` / `DISCORD_OPS_CHANNEL_ID`):** Restricted to Homelab Owner & Admins. Receives P1/P2 alerts, real-time intake/SRE audit streams, and executes administrative SRE tasks.
+- **Guardrailed Operator Plane (`#sudo-ops` / `DISCORD_SUDO_OPS_CHANNEL_ID`):** Dedicated operations channel where Operators interact with the SRE agent under zero-escalation guardrails.
 
-No download is queued until the user clicks `✅ Confirm Download`.
+### Real-Time Admin Audit Stream (`#ops`)
+- **Media Request Searches:** Broadcasts real-time cards when users search for media in `#req-*` channels, capturing raw prompts, target qualities, and matched titles.
+- **Operator Prompts & Responses:** Captures prompts executed in `#sudo-ops`, logs prompt text upon receipt, and publishes the agent's completed response back to `#ops`.
+- **Security Guardrail Violations:** Instantly alerts `#ops` with admin tags if an operator attempts privilege escalation, role manipulation, or unauthorized execution.
 
-### `/status`
+### Server Preservation & Anti-Destruction Guardrails
+The gateway strictly blocks operators from executing:
+- Filesystem deletion or wiping (`rm -rf` on system/media paths, `mkfs`, `fdisk`, `dd`).
+- Destroying or purging Proxmox containers/VMs (`pct destroy`, `qm destroy`).
+- Host power control (`shutdown`, `reboot`, `poweroff`).
+- Docker volume deletion or stopping containers unprompted (`docker compose down`).
+- Dropping databases or wiping media libraries.
 
-Displays ephemeral real-time queue progress bars, ETAs, and active downloads. Completed and declined items are excluded.
+---
 
-`🔍 See Details` displays pipeline tracking:
+## Role Management Commands (`/role`)
 
-```text
-[Portal] ➔ [Radarr/Sonarr] ➔ [Download] ➔ [Import] ➔ [Media server]
-```
+Homelab Admins can manage server member roles via slash or prefix commands:
+- `/role grant <@user> <role>`: Assigns a role (e.g. `Operator`).
+- `/role revoke <@user> <role>`: Removes a role.
+- `/role list <@user>`: Lists roles assigned to a member.
+- **Owner Immutability:** Any attempt to touch the Homelab Owner's roles or permissions is rejected unconditionally.
 
-with transfer speed, peer counts, ETA, target path, and streaming URL.
+---
 
-## Operator Plane
+## Autonomous Queue Watchdog & Quality Fallback
 
-### Lifecycle of an `!agent` Run
+The bridge includes an autonomous watchdog loop:
+- **Stalled Download Auto-Remediation:** Periodically scans queues for downloads stuck downloading metadata (>900s) or stalled with 0 sources (>600s), blocklists the bad release, purges it from the download client, and triggers an alternative release search.
+- **Quality Fallback Prompt View:** If all available indexer releases have 0 active sources, the watchdog automatically delivers an interactive view in the user's `#req-<user>` channel allowing them to switch to an alternative quality with active sources via a dropdown or cancel immediately.
 
-1. Operator sends `!agent <prompt>` or `/agent prompt:<prompt>` in the ops channel.
-2. Bridge verifies admin role permissions.
-3. **FIFO execution queue:** Active runs serialize execution. New requests are queued to prevent concurrent host state modifications.
-4. Discord typing heartbeat maintained during execution.
-5. `git fetch --all && git pull --rebase` executed on `/opt/homelab` to ensure documentation currency.
-6. Invokes `$AGENT_CLI_BIN $AGENT_CLI_ARGS "<prompt>"`.
-7. Session state preserved within thread or 15-minute window via `$AGENT_CLI_CONTINUE_FLAG`.
-8. Secret scrubber strips API keys, tokens, and WireGuard private keys from CLI output.
-9. Output chunked to 1900 characters preserving markdown code blocks.
+---
 
-Reset context with `!agent reset` or `!agent new`.
-
-### Agent CLI Configuration
-
-Configurable via environment variables in `/etc/homelab/homelab.env`:
-
-```bash
-AGENT_CLI_BIN=/usr/local/bin/<your-agent-cli>
-AGENT_CLI_ARGS=--add-dir /opt/homelab --print
-AGENT_CLI_CONTINUE_FLAG=--continue
-```
-
-The bridge shells out with the user prompt as the final positional argument.
-
-### Secret Scrubbing
-
-Two-layer filtering applied prior to Discord message transmission:
-
-- **Known values:** Exact matching against values defined in `/etc/homelab/homelab.env`.
-- **Pattern matching:** Regex scanning for bot tokens, private keys, authentication headers, and password hashes.
-
-In addition, [AGENTS.md](../AGENTS.md) instructs the agent never to output secrets.
-
-### Real-Time Alerts
-
-Subscribes to ntfy JSON stream and mirrors request and grab events into the ops channel as embeds.
-
-### Autonomous Queue Watchdog
-
-The bot periodically monitors queue health and storage thresholds. If queue items stall, auto-remediation triggers to blocklist failed releases and retry. Low disk space alerts are broadcast to the ops channel.
-
-## Service management
+## Service Management
 
 ```bash
 systemctl status homelab-bot.service
-systemctl restart homelab-bot.service        # after editing the script
+systemctl restart homelab-bot.service
 journalctl -u homelab-bot.service -n 50 --no-pager
-journalctl -u homelab-bot.service -f         # follow
-systemctl is-enabled homelab-bot.service     # confirm it survives a reboot
+journalctl -u homelab-bot.service -f
 ```
 
-## Required bot permissions
+## Required Bot Permissions
 
-Either grant the bot's role **Administrator**, or these specifically:
-
-- Manage Channels — provisioning request channels
-- Manage Roles — setting per-channel permission overwrites
+Grant the bot's role **Administrator**, or:
+- Manage Channels
+- Manage Roles
 - View Channels, Send Messages
-- Manage Messages — pinning the onboarding guide
-- Explicit allow on the media requests category
-
-## Troubleshooting
-
-**Bot will not start.** It reports exactly which variables are missing and where
-to find each one. Check `journalctl -u homelab-bot -n 30`.
-
-**`403 Forbidden (50013)` or `(50001)` on channel creation.** Missing
-permissions or missing access to the category. See the permissions list above.
-Role position matters too — the bot's role must sit above the roles it manages.
-
-**Agent runs time out.** Default cap is `AGENT_TIMEOUT_SECONDS=240`. If runs
-legitimately need longer, raise it; if they are looping, narrow the prompt.
-Discord's own interaction timeouts constrain how far this can go.
-
-**Agent answers with stale information.** It reads the workspace clone. Confirm
-the pull is succeeding: `cd /opt/homelab && git status`. A dirty working tree
-blocks `git pull --rebase`, which is why `AGENTS.md` forbids uncommitted
-host-side edits.
-
-**Slash commands do not appear.** Guild command sync is near-instant; global
-sync takes up to an hour. Confirm `DISCORD_GUILD_ID` is set — without it,
-commands register globally.
+- Manage Messages
+- Explicit permissions on the media requests category

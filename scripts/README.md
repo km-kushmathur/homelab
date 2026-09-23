@@ -8,21 +8,30 @@ Scripts require explicit configuration and will fail with missing-variable error
 
 ## `arr_cli.py` — unified media stack CLI
 
-Command-line interface managing Jellyseerr, Radarr, Sonarr, Prowlarr, download clients, and Jellyfin. Used by the Discord bridge, administrative agent, and manual operator shell.
+Command-line interface managing Jellyseerr, Radarr, Sonarr, Prowlarr, download clients, Bazarr, and Jellyfin. Used by the Discord bridge, administrative agent, and manual operator shell.
 
 **Core features:**
 
 - `parse_media_query` — Extracts title, year, season, and quality tags from free-text queries.
 - `rank_results` — Scores search results by popularity, vote count, exact title match, and release year.
 - `estimate_download_size` — Calculates runtime-based size estimates for movies and series prior to queuing.
-- `queue auto-remediate` — Detects stalled queue items, removes them, blocklists the failed release, and triggers alternative search.
+- `pipeline-details` — Provides comprehensive 5-stage diagnostics (`[Portal] ➔ [Arr Stack] ➔ [Download Client] ➔ [Import] ➔ [Jellyfin]`).
+- `pipeline-cancel` — Safely cancels active in-progress requests and cleans queues before completion.
+- `switch-quality` — Modifies quality profile targets on active items and triggers alternative release searches.
+- `history` — Queries comprehensive media request history with timestamps and status tracking.
+- `queue auto-remediate` — Detects stalled items, cleans queues, blocklists failed releases, and triggers alternative searches.
+- `subtitles` & `bazarr` — Coverage checking, synchronization, and subtitle daemon management.
+- `discord-role` — Administrator role assignment and revocation with Owner immutability enforcement.
 
 **Usage:**
 
 ```bash
 # Aggregate view: active downloads plus in-progress requests
-python3 scripts/arr_cli.py status
-python3 scripts/arr_cli.py pipeline-details <request_id>
+python3 scripts/arr_cli.py status [--user <user>] [--take 10]
+python3 scripts/arr_cli.py pipeline-details <request_id|arr_id>
+python3 scripts/arr_cli.py pipeline-cancel <request_id|title>
+python3 scripts/arr_cli.py switch-quality <id|title> --quality <1080p|720p|4k>
+python3 scripts/arr_cli.py history [--user <user>] [--take 50]
 
 # Discovery and requests
 python3 scripts/arr_cli.py jellyseerr search "example series season 2"
@@ -42,6 +51,18 @@ python3 scripts/arr_cli.py prowlarr test-all
 python3 scripts/arr_cli.py downloader list
 python3 scripts/arr_cli.py jellyfin refresh
 python3 scripts/arr_cli.py jellyfin sessions
+
+# Subtitles & Bazarr
+python3 scripts/arr_cli.py subtitles status
+python3 scripts/arr_cli.py subtitles sync [--dry-run]
+python3 scripts/arr_cli.py bazarr status
+python3 scripts/arr_cli.py bazarr search-missing
+python3 scripts/arr_cli.py bazarr sync
+
+# Discord role management (Admins only, Owner immutable)
+python3 scripts/arr_cli.py discord-role list <user>
+python3 scripts/arr_cli.py discord-role grant <user> <role>
+python3 scripts/arr_cli.py discord-role revoke <user> <role>
 ```
 
 Append `--json` to any command for machine-readable output.
@@ -52,8 +73,8 @@ Append `--json` to any command for machine-readable output.
 
 Provides two isolated interfaces:
 
-- **Household plane** — Members interact via private `#req-<username>` channels. Commands include `/request` (catalogue search, size estimation, download confirmation) and `/status` (real-time progress). Responses are ephemeral.
-- **Operator plane** — Admins run `!agent` or `/agent` in the ops channel to invoke an SRE coding-agent CLI grounded on this repository. Execution is serialized through a FIFO queue with secret scrubbing applied before Discord transmission.
+- **Household plane** — Members interact via private `#req-<username>` channels or DMs. Commands include `/request` (catalogue search, size estimation, storage pre-flight gate, download confirmation), `/status` (real-time progress, request timestamps, details view), `/cancel` (user-scoped cancellation of active downloads), `/history` (request log), and `/open-channel`.
+- **Operator plane** — Tiered operations channels (`#ops` for admins, `#sudo-ops` with guardrails for operators). Runs `!agent` or `/agent` to invoke an SRE coding-agent CLI grounded on this repository. Execution is serialized with secret scrubbing, typing heartbeats, and anti-destruction safety filters. Admins can also manage roles via `/role grant/revoke/list`.
 
 The agent CLI is configurable via `AGENT_CLI_BIN` and `AGENT_CLI_ARGS` to support any non-interactive agent executable.
 
@@ -61,11 +82,22 @@ Requires `discord.py`. Deployed via [`config/templates/systemd/homelab-bot.servi
 
 ---
 
+## `sync_subtitles.py` — subtitle synchronization engine
+
+Bulk subtitle remediation engine that ensures 100% English subtitle coverage across movies and TV series:
+- Scans Jellyfin library items for missing English audio or subtitle streams.
+- Downloads standardized external `.en.srt` files from Gestdown, YIFY, and SubDL.
+- Sets appropriate container file permissions and triggers Jellyfin/Bazarr library refreshes.
+
+Run directly via `python3 scripts/sync_subtitles.py [--dry-run]` or via `python3 scripts/arr_cli.py subtitles sync`.
+
+---
+
 ## `check_storage.sh` — storage watchdog
 
 Monitors the external media mount point. If the mount disconnects, the script stops dependent containers, cycles the filesystem mount, restarts containers, and triggers a Jellyfin library rescan.
 
-This prevents running download clients from writing into an unmounted mount point on the host root filesystem. A 15-second systemd timer executes the check, using `flock` to prevent concurrent executions.
+This prevents running download clients from writing into an unmounted mount point on the host root filesystem. A 15-second systemd timer executes the check.
 
 Create `/tmp/maintenance.lock` to suspend watchdog execution during maintenance.
 

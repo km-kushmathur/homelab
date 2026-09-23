@@ -14,6 +14,7 @@ Listening services and default ports across the environment:
 | Prowlarr | `192.168.1.14` | `9696` | Indexer manager |
 | FlareSolverr | `192.168.1.14` | `8191` | Challenge-solving proxy |
 | Jellyseerr | `192.168.1.14` | `5055` | Request portal |
+| Bazarr | `192.168.1.14` | `6767` | Subtitle management daemon |
 | ntfy | `192.168.1.14` | `80` | Push notification server |
 
 Port assignments are configurable in [`config/templates/docker/.env.example`](../config/templates/docker/.env.example).
