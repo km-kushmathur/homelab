@@ -7,40 +7,9 @@ When the storage drive operates near peak utilization (typically >90% capacity),
 
 ---
 
-## 1. Automated Storage Pre-Flight Gate (`/request`)
+## 1. Storage checks for requests
 
-The Discord Gateway Bridge (`scripts/discord_bridge.py`) implements an automated pre-flight disk capacity verification gate before any user download request is submitted to Jellyseerr, Radarr, or Sonarr:
-
-```mermaid
-flowchart TD
-    A[User clicks 'Confirm Download' in Discord] --> B{Check free space on MEDIA_ROOT}
-    B -->|Free Space >= 15.0 GB| C[Queue request in Jellyseerr / Radarr / Sonarr]
-    C --> D[Post P2 audit embed to ops channel]
-    B -->|Free Space < 15.0 GB| E[Block Request Execution]
-    E --> F[Display 'Server Storage is Full' card in user channel]
-    E --> G[Post P1 'Storage Capacity Alert' to ops channel]
-```
-
-### Safety Threshold (15 GB Safe Buffer)
-- **Threshold:** `15.0 GB free` on `${MEDIA_ROOT}`.
-- **Rationale:** Prevents incomplete downloads from freezing the download client, prevents hardlink import failures in Radarr/Sonarr, and ensures headroom for SQLite database operations in Jellyfin and the Arr services.
-
-### User Experience (Household Plane)
-When free space drops below 15 GB, the user's confirmation interaction is stopped immediately. The bot updates the embed to an orange warning card:
-> 📦 **Server Storage is Full**  
-> The server is currently low on storage space, so your request for **[Title]** couldn't start yet.  
-> Please contact an administrator so they can clear some space for you!
-
-### Operator Alerting (Operator SRE Plane)
-Simultaneously, a **P1 Critical Alert** is dispatched to the ops channel:
-- **Title:** `🚨 Storage Capacity Alert`
-- **Fields:**
-  - **User:** Requester mention and username
-  - **Requested Media:** Title and media type
-  - **Available Space:** Exact free GB (Below 15 GB safe threshold)
-  - **Action Required:** `Clear host media drive space.`
-
----
+Discord confirmations and acquisition commands require the expected writable filesystem and at least 15 GiB available. Verification failures and maintenance mode block intake. Discord tells the requester that storage is unavailable and posts the reason to the ops channel.
 
 ## 2. Storage Inspection & Diagnostics
 
@@ -49,9 +18,9 @@ Operators and the SRE agent can inspect storage metrics at multiple granularitie
 ### High-Level Host Disk Check
 Verify overall disk utilization and mount health:
 ```bash
-df -h ${MEDIA_ROOT}
+python3 /opt/homelab/scripts/arr_cli.py storage
 ```
-*Expected healthy state:* Mounted on `${MEDIA_ROOT}`, with at least 15–20 GB available headroom.
+Use `/storage` in Discord to check the verified media disk and the headroom above the 15 GiB reserve.
 
 ### Conversational SRE Inquiries (`!agent`)
 The SRE agent can analyze storage usage directly from the ops channel:
@@ -67,7 +36,7 @@ The SRE agent can analyze storage usage directly from the ops channel:
   Inspects season folders, episode counts, and codecs to identify specific high-yield seasons to prune.
 
 ### Direct Command-Line Breakdown
-Run directory-level queries on the media mount:
+After verifying the filesystem, set `MEDIA_ROOT` to the configured mountpoint and run directory-level queries.
 ```bash
 # Top-level media breakdown (Movies vs TV vs Downloads)
 du -sh ${MEDIA_ROOT}/*
@@ -83,7 +52,7 @@ du -sh ${MEDIA_ROOT}/movies/* | sort -rh | head -n 10
 
 ## 3. Safe Media Pruning Procedures
 
-When storage drops below the 15 GB threshold, space must be reclaimed. Follow these safe pruning procedures to prevent broken library references or unwanted re-downloads.
+When storage drops below the 15 GiB threshold, space must be reclaimed. Follow these safe pruning procedures to prevent broken library references or unwanted re-downloads.
 
 ### Strategy A: Pruning Watched TV Series / Seasons (High Yield)
 Multi-season TV series represent the largest storage footprint across the library.

@@ -10,9 +10,9 @@ Start here: [Setup Guide](docs/setup/01-proxmox-host.md).
 
 ## System Overview
 
-- **Automated storage recovery:** The library resides on external storage. If the mount drops, running containers could write into the host's root filesystem. A systemd watchdog detects drops every 15 seconds, stops dependent containers, remounts storage, and restarts services. See [Storage Watchdog](docs/admin_storage_watchdog.md).
+- **Automated storage recovery:** The library resides on external storage. If the mount drops, running containers could write into the host's root filesystem. A systemd watchdog verifies the expected storage every 15 seconds and restarts the previously running media containers after recovery. Proxmox startup hooks use the same check. See [Storage Watchdog](docs/admin_storage_watchdog.md).
 - **Discord media requests:** Private user channels provide `/request` and `/status` commands with release size estimates and progress updates, isolating household members from direct infrastructure access.
-- **Discord operations agent:** An SRE agent in the ops channel executes administrative tasks and troubleshooting commands via hypervisor CLI, grounded on documentation in this repository.
+- **Discord operations agent:** Administrators can use the SRE agent in the configured ops channel to execute administrative tasks and troubleshooting commands via hypervisor CLI, grounded on documentation in this repository.
 
 ---
 

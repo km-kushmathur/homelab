@@ -20,50 +20,30 @@ Verify lockfile presence with `ls -l /tmp/maintenance.lock`.
 
 ## Manual Recovery Sequence
 
-Check current mount and container status:
-
-```bash
-mountpoint -q /mnt/media && echo mounted || echo "NOT MOUNTED"
-pct status 201
-pct status 204
-```
-
-If storage is unmounted or returning I/O errors:
+Enable maintenance mode and check the state of each container with a media bind mount. Gracefully shut down each running container and confirm it has stopped before touching the mount.
 
 ```bash
 touch /tmp/maintenance.lock
-
-pct stop 201
-pct stop 204
-
-umount -l /mnt/media || true   # lazy unmount clears stale handles
-mount /mnt/media
-sync
-umount /mnt/media
-mount /mnt/media
-
-mountpoint -q /mnt/media || { echo "ERROR: Storage failed to mount"; }
-
-pct start 201
-pct start 204
-rm -f /tmp/maintenance.lock
+pct status 201
+pct status 204
+# For each running container:
+pct shutdown <ctid> --timeout 60
+pct status <ctid>
+findmnt -n -M /mnt/media -o TARGET,UUID,FSTYPE,OPTIONS
 ```
 
-Confirm containers report `status: running`.
+Compare the mounted device with the expected UUID in `/etc/homelab/media-storage.json`. If a different filesystem is mounted or the device cannot be identified, investigate before unmounting. After confirming the device and resolving the underlying issue, cleanly unmount the stale filesystem if it is still mounted, mount it through `/etc/fstab`, and verify it.
 
-**Mount cycling rationale:** A single remount can retain stale kernel file handles. Cycling through mount, sync, unmount, and mount forces a clean kernel attachment.
+```bash
+mount /mnt/media
+timeout 20 python3 /opt/homelab/scripts/media_storage.py --json
+```
+
+After the check succeeds, start the containers that were running before the failure. Check their status, then remove the maintenance lock to resume the watchdog and media intake.
 
 ## Ghost Mounts
 
-If physical storage disconnects, the mount directory may remain visible while reads return I/O errors:
-
-```text
-ls: reading directory '/media': I/O error
-```
-
-> **Warning:** Never execute `mkdir -p` against the media path without checking `mountpoint -q` first. If unmounted, directories are created on the host root filesystem, leading to boot disk exhaustion.
-
-The lazy unmount (`umount -l`) in the recovery sequence clears ghost file handles.
+A disconnected drive can leave a mount entry behind while reads fail with I/O errors. The watchdog can recognize a previously verified mount by mount ID, block device number, and filesystem type. Check the journal and kernel logs if that verification fails.
 
 ## Diagnosing "Root folder does not exist"
 

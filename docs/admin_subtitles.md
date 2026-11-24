@@ -62,7 +62,7 @@ python3 /opt/homelab/scripts/arr_cli.py bazarr search-missing
 python3 /opt/homelab/scripts/arr_cli.py bazarr sync
 ```
 
-Append `--json` to any command for structured JSON output.
+The sync command verifies the host media filesystem before writing subtitles. Use `--dry-run` to preview missing subtitles without downloading, refreshing Jellyfin, or triggering Bazarr tasks.
 
 ## Jellyfin Library Options
 

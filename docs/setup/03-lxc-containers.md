@@ -66,7 +66,7 @@ pct create 201 local:vztmpl/debian-13-standard_13.x_amd64.tar.zst \
   --net0 name=eth0,bridge=vmbr0,ip=192.168.1.11/24,gw=192.168.1.1 \
   --features nesting=1 \
   --unprivileged 1 \
-  --onboot 1 \
+  --onboot 0 \
   --tags media
 ```
 
@@ -76,7 +76,7 @@ pct create 201 local:vztmpl/debian-13-standard_13.x_amd64.tar.zst \
 | `--memory 8192` | 8 GB RAM allocation for transcoding operations |
 | `--features nesting=1` | Required for systemd and service operations |
 | `--unprivileged 1` | Enables user namespace UID offset mapping |
-| `--onboot 1` | Automatic startup on hypervisor boot |
+| `--onboot 0` | Start the media containers explicitly after verifying storage |
 
 Configure the host bind mount:
 
@@ -98,7 +98,7 @@ pct create 204 local:vztmpl/debian-13-standard_13.x_amd64.tar.zst \
   --net0 name=eth0,bridge=vmbr0,ip=192.168.1.14/24,gw=192.168.1.1,firewall=1 \
   --features nesting=1,keyctl=1 \
   --unprivileged 1 \
-  --onboot 1 \
+  --onboot 0 \
   --tags media
 
 pct set 204 -mp0 /mnt/media,mp=/mnt/media
@@ -123,10 +123,20 @@ Reference configs: [`lxc-jellyfin.conf`](../../config/examples/pve/lxc-jellyfin.
 
 ---
 
+## Install the storage startup hook
+
+Use the repository checkout at `/opt/homelab` from [storage setup](02-storage.md). In Proxmox, add **Snippets** to the existing content types on the `local` directory storage, then install the hook and attach it to each media container.
+
+```bash
+install -D -m 0755 /opt/homelab/scripts/media-storage-hook.sh /var/lib/vz/snippets/media-storage-hook.sh
+pct set 201 --hookscript local:snippets/media-storage-hook.sh
+pct set 204 --hookscript local:snippets/media-storage-hook.sh
+```
+
 ## Start and Initialize Containers
 
 ```bash
-pct start 201 && pct start 204
+timeout 20 python3 /opt/homelab/scripts/media_storage.py --json && pct start 201 && pct start 204
 pct status 201; pct status 204        # verify status: running
 ```
 

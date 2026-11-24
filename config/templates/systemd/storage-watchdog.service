@@ -14,3 +14,4 @@ After=local-fs.target
 Type=oneshot
 EnvironmentFile=-/etc/homelab/homelab.env
 ExecStart=/usr/bin/flock -n /run/storage-watchdog.lock /opt/homelab/scripts/check_storage.sh
+TimeoutStartSec=240

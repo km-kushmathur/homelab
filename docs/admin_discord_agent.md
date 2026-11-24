@@ -5,11 +5,9 @@ Architecture and operational runbook for [`scripts/discord_bridge.py`](../script
 Setup instructions: [setup/10-discord-agent.md](setup/10-discord-agent.md).
 
 > 🛑 **Security Architecture & Role Management Policy:**
-> - **Role Management by Admins:** Homelab Admins are authorized to grant, assign, and revoke Discord roles (such as `Operator`, `Admin`, or member roles) for server members via `/role grant/revoke`, `!role grant/revoke`, or `python3 /opt/homelab/scripts/arr_cli.py discord-role grant/revoke`.
+> - **Role management:** Discord role commands let administrators manage lower-ranked members and roles. The configured owner can manage administrator roles.
 > - **Permanent Owner Immutability Rule:** The Homelab Owner (`OWNER_DISCORD_ID`) is permanently exempt, untouchable, and immutable. Under NO circumstances may ANY user (Admin or Operator), agent command, or script grant, revoke, modify, strip, elevate, or tamper with the Owner's roles, permissions, channel overwrites, or status. Any attempt to touch the Owner's roles or permissions is immediately and unconditionally refused and alerted to the ops channel.
-> - **Operator Zero-Escalation:** The `Operator` role holds `permissions: 0` on Discord. Operators in `#sudo-ops` remain strictly prohibited from managing roles, escalating privileges, editing channels, or granting permissions.
 > - **Channel Privacy:** Operators have zero visibility into any other user's private media request channel (`#req-<username>`) and cannot access the admin `#ops` channel.
-> - **Hard Guardrails:** The bridge gateway rejects any command from an Operator in `#sudo-ops` that attempts to alter roles, elevate privileges, modify permissions, or expose credentials.
 
 > ℹ️ **Note:** The Discord bot token and service credentials live securely in `/etc/homelab/homelab.env` (mode `0600`) and are untracked in version control.
 
@@ -26,7 +24,7 @@ Setup instructions: [setup/10-discord-agent.md](setup/10-discord-agent.md).
                                        v                                      v
                  +--------------------------------------+      +--------------------------------------+
                  |        Household Intake Plane        |      |          Operator SRE Plane          |
-                 | (Private Channels under Category/DM) |      |         (#ops / #sudo-ops)           |
+                 | (Private Channels under Category/DM) |      |         (#ops)           |
                  +--------------------------------------+      +--------------------------------------+
                      |              |              |                              |
                      v              v              v                              v
@@ -69,7 +67,7 @@ Plane separation is strictly enforced: agent commands are rejected in household 
 - **Query parsing:** Resolution tags (`4k`, `1080p`, `720p`, `uhd`, `hdr`, `remux`, `bluray`, `web-dl`), media-type hints, and season tokens (`season 2`, `s02`) are extracted from free-text queries to determine intent while keeping catalogue searches clean.
 - **Ranking:** Scored by popularity, vote count, title match, and release year.
 - **Release sizing:** Computes runtime-based size estimates (`1080p`: ~35-75 MB/min, `4K`: ~100-185 MB/min).
-- **Storage Pre-Flight Gate (15 GB Buffer):** Verifies free space on `${MEDIA_ROOT}`. If available space is below 15 GB, download confirmation is blocked, an explanatory card is shown, and a P1 Critical Alert is posted to the ops channel.
+- **Storage verification:** Request confirmation requires the expected writable ext4 filesystem and at least 15 GiB available. A failed check blocks the request and alerts the ops channel. Use `/storage` for available space and headroom.
 - **In-Theatres / CAM Gating:** Releases that are still in theatres without an official digital release are flagged. Users are informed that only theatre recordings exist and instructed to contact an administrator for manual review.
 
 ### 4. `/status [user]`
@@ -98,12 +96,10 @@ Plane separation is strictly enforced: agent commands are rejected in household 
 ## Operator SRE Plane
 
 ### Channel Scoping & Privilege Tiers
-- **Admin Control Plane (`#ops` / `DISCORD_OPS_CHANNEL_ID`):** Restricted to Homelab Owner & Admins. Receives P1/P2 alerts, real-time intake/SRE audit streams, and executes administrative SRE tasks.
-- **Guardrailed Operator Plane (`#sudo-ops` / `DISCORD_SUDO_OPS_CHANNEL_ID`):** Dedicated operations channel where Operators interact with the SRE agent under zero-escalation guardrails.
+- **Admin Control Plane (`#ops` / `DISCORD_OPS_CHANNEL_ID`):** Restricted to Homelab Owner & Admins. Receives P1/P2 alerts, real-time intake/SRE audit streams, and accepts SRE commands from administrators in that channel and its threads.
 
 ### Real-Time Admin Audit Stream (`#ops`)
 - **Media Request Searches:** Broadcasts real-time cards when users search for media in `#req-*` channels, capturing raw prompts, target qualities, and matched titles.
-- **Operator Prompts & Responses:** Captures prompts executed in `#sudo-ops`, logs prompt text upon receipt, and publishes the agent's completed response back to `#ops`.
 - **Security Guardrail Violations:** Instantly alerts `#ops` with admin tags if an operator attempts privilege escalation, role manipulation, or unauthorized execution.
 
 ### Server Preservation & Anti-Destruction Guardrails

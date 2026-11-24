@@ -11,6 +11,7 @@
 | `templates/docker/.env.example` | Environment file for the compose stack. Copy to `.env` beside it. |
 | `templates/gluetun/wireguard.conf.example` | Annotated reference for a provider-issued WireGuard profile. |
 | `templates/tailscale/acl.json` | Tailnet ACL policy. Edit here, then deploy from the Tailscale admin console. |
+| `examples/pve/media-storage.json.example` | Expected mountpoint and filesystem UUID for the storage probe and Proxmox startup hook. |
 | `templates/systemd/homelab-bot.service` | Unit for the Discord bridge daemon. |
 | `templates/systemd/storage-watchdog.{service,timer}` | Unit and 15-second timer for the storage watchdog. |
 

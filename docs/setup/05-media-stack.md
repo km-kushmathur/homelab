@@ -90,6 +90,7 @@ Required configuration parameters:
 | `MEDIA_ROOT` | `/mnt/media` (must match host bind mount) |
 | `VPN_SERVICE_PROVIDER` | Gluetun provider identifier |
 | `WIREGUARD_PRIVATE_KEY` | WireGuard private key from VPN provider |
+| `WIREGUARD_ADDRESSES` | Interface CIDR from the provider profile when required |
 | `SERVER_COUNTRIES` | Target egress country code |
 | `NTFY_BASE_URL` | `http://192.168.1.14` |
 

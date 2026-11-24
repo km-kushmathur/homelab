@@ -24,6 +24,8 @@ import urllib.error
 from typing import Any, Dict, List, Optional, Union
 from datetime import datetime, timezone
 
+from media_storage import GIB, MIN_FREE_GIB, StorageUnavailable, require_media_storage
+
 
 DEFAULT_ENV_FILE = "/etc/homelab/homelab.env"
 
@@ -583,6 +585,7 @@ def cmd_jellyseerr_details(args: argparse.Namespace) -> None:
 
 
 def cmd_jellyseerr_request(args: argparse.Namespace) -> None:
+    require_media_storage(MIN_FREE_GIB)
     media_id = int(args.id)
     media_type = args.media_type.lower()
     if media_type not in ["movie", "tv"]:
@@ -1617,12 +1620,15 @@ def switch_media_quality(identifier: Union[int, str], quality: str, media_type: 
 
 
 def cmd_pipeline_switch_quality(args: argparse.Namespace) -> None:
+    require_media_storage(MIN_FREE_GIB)
     ident = args.id
     q = args.quality
     mtype = getattr(args, "media_type", None)
     res = switch_media_quality(ident, quality=q, media_type=mtype)
     if args.json:
         print(json.dumps(res, indent=2))
+        if res.get("error"):
+            sys.exit(1)
         return
 
     if res.get("error"):
@@ -2232,6 +2238,7 @@ def cmd_radarr_queue(args: argparse.Namespace) -> None:
 
 
 def cmd_radarr_rescan(args: argparse.Namespace) -> None:
+    require_media_storage()
     movie_id = int(args.movie_id)
     url = f"{RADARR_URL}/api/v3/command"
     payload = {"name": "RescanMovie", "movieId": movie_id}
@@ -2485,6 +2492,7 @@ def cmd_queue_auto_remediate(args: argparse.Namespace) -> None:
     Also auto-heals unrouted intake requests in Jellyseerr to ensure backend binding parity.
     If multiple attempts fail or all available releases have 0 sources, marks the item as unresolvable so the requester is notified.
     """
+    require_media_storage(MIN_FREE_GIB)
     remediated = []
     # 0. Check and auto-heal any unrouted Jellyseerr intake requests
     healed_intake = auto_heal_jellyseerr_requests()
@@ -2750,6 +2758,7 @@ def cmd_queue_auto_remediate(args: argparse.Namespace) -> None:
 
 
 def cmd_sonarr_search_missing(args: argparse.Namespace) -> None:
+    require_media_storage(MIN_FREE_GIB)
     series_id = int(args.series_id)
     url = f"{SONARR_URL}/api/v3/command"
     payload = {"name": "SeriesSearch", "seriesId": series_id}
@@ -2920,6 +2929,7 @@ def cmd_downloader_list(args: argparse.Namespace) -> None:
 # --- Jellyfin Commands ---
 
 def cmd_jellyfin_refresh(args: argparse.Namespace) -> None:
+    require_media_storage()
     url = f"{JELLYFIN_URL}/Library/Refresh?api_key={JELLYFIN_API_KEY}"
     res = make_request(url, method="POST", data=b"")
 
@@ -3321,6 +3331,7 @@ def cmd_bazarr_status(args) -> None:
 
 
 def cmd_bazarr_search_missing(args) -> None:
+    require_media_storage()
     headers = {"X-API-KEY": BAZARR_API_KEY}
     for task_id in ["wanted_search_missing_subtitles_movies", "wanted_search_missing_subtitles_series"]:
         url = f"{BAZARR_URL}/api/system/tasks?taskid={task_id}"
@@ -3338,6 +3349,7 @@ def cmd_bazarr_search_missing(args) -> None:
 
 
 def cmd_bazarr_sync(args) -> None:
+    require_media_storage()
     headers = {"X-API-KEY": BAZARR_API_KEY}
     for task_id in ["update_movies", "update_series"]:
         url = f"{BAZARR_URL}/api/system/tasks?taskid={task_id}"
@@ -3354,6 +3366,17 @@ def cmd_bazarr_sync(args) -> None:
         print("✅ Triggered Bazarr library sync with Radarr and Sonarr.")
 
 
+def cmd_storage(args: argparse.Namespace) -> None:
+    storage = require_media_storage()
+    storage["safe_headroom_bytes"] = storage["free_bytes"] - MIN_FREE_GIB * GIB
+    if args.json:
+        print(json.dumps(storage, indent=2))
+        return
+    total, free = storage["total_bytes"] / GIB, storage["free_bytes"] / GIB
+    print(f"{storage['mountpoint']}: verified ext4, {free:.1f} GiB free of {total:.1f} GiB")
+    print(f"Headroom above {MIN_FREE_GIB} GiB reserve: {storage['safe_headroom_bytes'] / GIB:.1f} GiB")
+
+
 def build_parser() -> argparse.ArgumentParser:
     json_parent = argparse.ArgumentParser(add_help=False)
     json_parent.add_argument("--json", action="store_true", help="Output results in JSON format")
@@ -3365,6 +3388,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="service", required=True, help="Target service")
+
+    p_storage = subparsers.add_parser("storage", parents=[json_parent], help="Verify the media disk and report capacity")
+    p_storage.set_defaults(func=cmd_storage)
 
     # Unified Status command
     p_stat = subparsers.add_parser("status", parents=[json_parent], help="Aggregate active downloads and in-progress requests")
@@ -3562,7 +3588,14 @@ def main() -> None:
         args.json = True
     if hasattr(args, "func"):
         require_env(getattr(args, "service", ""))
-        args.func(args)
+        try:
+            args.func(args)
+        except StorageUnavailable as exc:
+            if getattr(args, "json", False):
+                print(json.dumps({"error": str(exc)}))
+            else:
+                print(str(exc), file=sys.stderr)
+            sys.exit(1)
     else:
         parser.print_help()
 

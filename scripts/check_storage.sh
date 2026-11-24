@@ -1,114 +1,122 @@
 #!/bin/bash
-# Homelab storage watchdog.
-#
-# Detects when the shared media mount has dropped, safely stops the containers
-# that depend on it, cycles the mount, restarts them, and triggers a media
-# library rescan -- notifying at each step.
-#
-# Why this exists: when a mount disappears from under a running container, the
-# container does not error. It sees an empty directory and happily keeps
-# writing -- into the host's root filesystem. A downloader left in that state
-# will fill the boot disk. Detecting the drop quickly matters more than
-# recovering elegantly.
-#
-# Deploy to /opt/homelab/scripts/check_storage.sh and drive it from
-# storage-watchdog.timer (see config/templates/systemd/).
-#
-# Full runbook: docs/admin_storage_watchdog.md
-
-set -uo pipefail
+# Run on the Proxmox host via storage-watchdog.timer.
+set -euo pipefail
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# The systemd unit loads the same file for scheduled runs. Read it here as well
+# for operators invoking this script directly.
 ENV_FILE="${HOMELAB_ENV_FILE:-/etc/homelab/homelab.env}"
-if [ -f "$ENV_FILE" ]; then
-    # shellcheck disable=SC1090
-    set -a; . "$ENV_FILE"; set +a
+if [[ -f "$ENV_FILE" ]]; then
+    while IFS='=' read -r name value || [[ -n "$name" ]]; do
+        case "$name" in
+            WATCHDOG_CT_IDS|MAINTENANCE_LOCK|STOP_TIMEOUT|NTFY_BASE_URL|NTFY_TOPIC|MEDIA_STORAGE_CONFIG)
+                case "$value" in
+                    \"*\"|\'*\') value=${value:1:${#value}-2} ;;
+                esac
+                if ! printenv "$name" >/dev/null; then
+                    export "$name=$value"
+                fi
+                ;;
+        esac
+    done < "$ENV_FILE"
 fi
 
-# --- Configuration (all overridable from the environment file) --------------
-MOUNT_POINT="${MEDIA_ROOT:-/mnt/media}"
+GUARD="$(dirname -- "$0")/media_storage.py"
+LAST_GOOD=/run/homelab-media-last-good.json
+STATE=/run/homelab-storage-recovery.ids
 read -r -a CT_IDS <<< "${WATCHDOG_CT_IDS:-201 204}"
-MEDIA_SERVER_IP="${MEDIA_SERVER_IP:-}"
-MEDIA_SERVER_PORT="${MEDIA_SERVER_PORT:-8096}"
-NTFY_BASE_URL="${NTFY_BASE_URL:-https://ntfy.sh}"
-NTFY_TOPIC="${NTFY_TOPIC:-}"
-JELLYFIN_API_KEY="${JELLYFIN_API_KEY:-}"
 MAINTENANCE_LOCK="${MAINTENANCE_LOCK:-/tmp/maintenance.lock}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-30}"
-# ---------------------------------------------------------------------------
 
-# Maintenance override: skip auto-recovery entirely while the lock is present,
-# so deliberate maintenance is not fought by the watchdog.
-if [ -f "$MAINTENANCE_LOCK" ]; then
-    exit 0
-fi
+maintenance() { [[ -e "$MAINTENANCE_LOCK" ]]; }
+
+healthy() {
+    local result
+    result=$(mktemp /run/.homelab-media-check.XXXXXX) || return 1
+    if timeout 20 python3 "$GUARD" --json >"$result"; then
+        mv "$result" "$LAST_GOOD"
+        return
+    fi
+    unlink "$result"
+    return 1
+}
 
 notify() {
-    [ -n "$NTFY_TOPIC" ] || return 0
-    curl -fsS -m 10 -d "$1" "${NTFY_BASE_URL%/}/${NTFY_TOPIC}" >/dev/null 2>&1 || true
-}
-
-fail() {
-    echo "ERROR: $1" >&2
-    notify "CRITICAL: $1. Auto-recovery aborted."
-    exit 1
-}
-
-stop_containers() {
-    for ct in "${CT_IDS[@]}"; do
-        if [ "$(pct status "$ct" | awk '{print $2}')" != "running" ]; then
-            continue
-        fi
-        pct stop "$ct" || fail "Failed to issue stop for container $ct"
-
-        waited=0
-        while [ "$(pct status "$ct" | awk '{print $2}')" != "stopped" ]; do
-            sleep 2
-            waited=$((waited + 2))
-            if [ "$waited" -ge "$STOP_TIMEOUT" ]; then
-                fail "Container $ct did not stop within ${STOP_TIMEOUT}s"
-            fi
-        done
-    done
-}
-
-start_containers() {
-    for ct in "${CT_IDS[@]}"; do
-        pct start "$ct" || fail "Failed to start container $ct"
-    done
-}
-
-rescan_library() {
-    # Optional: only attempted when both the address and a key are configured.
-    [ -n "$MEDIA_SERVER_IP" ] && [ -n "$JELLYFIN_API_KEY" ] || return 0
-
-    code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 -X POST \
-        -H "X-Emby-Token: ${JELLYFIN_API_KEY}" \
-        "http://${MEDIA_SERVER_IP}:${MEDIA_SERVER_PORT}/Library/Refresh")
-
-    if [ "$code" = "204" ]; then
-        notify "Recovered: mount restored, containers restarted, library rescan started."
-    else
-        notify "Partial: mount restored and containers restarted, but the library rescan returned HTTP ${code}."
+    echo "$1" >&2
+    if [[ -n "${NTFY_TOPIC:-}" ]]; then
+        local endpoint="${NTFY_BASE_URL:-https://ntfy.sh}"
+        curl -fsS --max-time 5 -d "$1" "${endpoint%/}/${NTFY_TOPIC}" >/dev/null 2>&1 || true
     fi
 }
 
-mountpoint -q "$MOUNT_POINT" && exit 0
+fail() { notify "CRITICAL: $*. Automatic recovery stopped."; exit 1; }
 
-notify "Alert: ${MOUNT_POINT} is not mounted. Stopping dependent containers for recovery."
+maintenance && exit 0
+if healthy; then
+    # Do not start workloads merely because storage came back after a failed run.
+    if [[ -e "$STATE" ]]; then
+        unlink "$STATE"
+    fi
+    exit 0
+fi
 
-stop_containers
+notify "Media storage did not pass verification. Stopping dependent containers."
+if [[ ! -e "$STATE" ]]; then
+    running=()
+    for id in "${CT_IDS[@]}"; do
+        status=$(pct status "$id") || fail "Cannot determine container $id state"
+        if [[ "$status" == 'status: running' ]]; then
+            running+=("$id")
+        fi
+    done
+    state_tmp=$(mktemp /run/.homelab-storage-recovery.XXXXXX)
+    if (( ${#running[@]} )); then
+        printf '%s\n' "${running[@]}" >"$state_tmp"
+    fi
+    mv "$state_tmp" "$STATE"
+fi
 
-# Cycle the mount twice with a sync in between. A single remount often
-# reattaches a stale handle; the sync-and-recycle forces a clean one.
-umount "$MOUNT_POINT" 2>/dev/null || true
-mount "$MOUNT_POINT"    || fail "Initial mount of ${MOUNT_POINT} failed"
-sync                    || fail "sync failed"
-umount "$MOUNT_POINT"   || fail "Unmount during mount cycle failed"
-mount "$MOUNT_POINT"    || fail "Final mount of ${MOUNT_POINT} failed"
+for id in "${CT_IDS[@]}"; do
+    maintenance && exit 0
+    status=$(pct status "$id") || fail "Cannot determine container $id state"
+    if [[ "$status" == 'status: running' ]]; then
+        pct shutdown "$id" --timeout "$STOP_TIMEOUT" || fail "Graceful shutdown failed for container $id"
+    fi
+    [[ "$(pct status "$id")" == 'status: stopped' ]] || fail "Container $id is not stopped"
+done
 
-mountpoint -q "$MOUNT_POINT" || fail "Mount commands succeeded but ${MOUNT_POINT} is still not a mountpoint"
+maintenance && exit 0
+settings=$(python3 "$GUARD" --settings) || fail 'Invalid media storage configuration'
+mount_point=${settings%$'\n'*}
+expected=${settings##*$'\n'}
+if mountpoint -q "$mount_point"; then
+    actual=$(findmnt -n -M "$mount_point" -o UUID) || fail 'Cannot identify mounted filesystem'
+    if [[ "$actual" != "$expected" ]]; then
+        [[ -z "$actual" ]] || fail 'A different filesystem is mounted'
+        mount_id=$(findmnt -n -M "$mount_point" -o ID) || fail 'Cannot identify stale mount'
+        device=$(findmnt -n -M "$mount_point" -o MAJ:MIN) || fail 'Cannot identify stale device'
+        fstype=$(findmnt -n -M "$mount_point" -o FSTYPE) || fail 'Cannot identify stale filesystem type'
+        python3 "$GUARD" --known-stale-mount "$mount_id" --device "$device" --filesystem-type "$fstype" \
+            || fail 'The stale mount was not previously verified'
+    fi
+    umount "$mount_point" || fail 'Clean unmount failed'
+fi
 
-start_containers
-sleep 15
-rescan_library
+maintenance && exit 0
+mount "$mount_point" || fail 'Mount failed'
+healthy || fail 'The recovered filesystem did not pass verification'
+while IFS= read -r id; do
+    maintenance && exit 0
+    configured=false
+    for ct in "${CT_IDS[@]}"; do
+        if [[ "$id" == "$ct" ]]; then
+            configured=true
+            break
+        fi
+    done
+    "$configured" || fail 'Invalid container in recovery state'
+    healthy || fail 'Storage failed verification before restart'
+    pct start "$id" || fail "Restart failed for container $id"
+done <"$STATE"
+unlink "$STATE"
+notify "Media storage recovered. Previously running containers were restarted."

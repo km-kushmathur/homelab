@@ -14,8 +14,9 @@ The Discord automation bridge (`scripts/discord_bridge.py`) separates household 
 
 ### 1. Household Intake Plane (Private Personal Channels & DMs)
 All household media intake is handled exclusively inside private personal channels (`#req-<username>`) under the configured media requests category or in DMs:
-- **`/request <title>`**: Searches TMDB via Jellyseerr, displays metadata and runtime-based download size estimates (`1080p`: ~35-75 MB/min, `4K`: ~100-185 MB/min), and gates downloads behind an interactive confirmation view (`✅ Confirm Download` / `❌ Cancel`).
-- **`/status [user]`**: Ephemeral check of active download queues with visual ASCII progress bars (`████░░░░░░`) and ETAs, active in-progress Jellyseerr requests with relative request timestamps (`• <t:timestamp:R>`), and an interactive `🔍 See Details` button allowing users to inspect the live 5-stage pipeline (`[Jellyseerr] ➔ [Radarr/Sonarr] ➔ [Download Client] ➔ [Import] ➔ [Jellyfin]`), exact request submission timestamps, real-time download speeds, sources, and direct Jellyfin streaming links. In personal channels and DMs, results are strictly isolated to the calling user's requests. In the ops channel (or for Admins), defaults to displaying all active downloads and in-progress requests across all users, with an optional `user` filter parameter.
+- **`/storage`**: Reports available space on the verified media disk.
+- **`/request <title>`**: Accepts a single title per request. Searches TMDB via Jellyseerr, displays metadata and runtime-based download size estimates (`1080p`: ~35-75 MB/min, `4K`: ~100-185 MB/min), and gates downloads behind an interactive confirmation view (`✅ Confirm Download` / `❌ Cancel`).
+- **`/status [user]`**: Ephemeral check of active download queues with visual ASCII progress bars (`████░░░░░░`) and ETAs, active in-progress Jellyseerr requests with relative request timestamps (`• <t:timestamp:R>`), and an interactive `🔍 See Details` button allowing users to inspect the live 5-stage pipeline (`[Jellyseerr] ➔ [Radarr/Sonarr] ➔ [Download Client] ➔ [Import] ➔ [Jellyfin]`), exact request submission timestamps, real-time download speeds, sources, and direct Jellyfin streaming links. In personal channels and DMs, results are strictly isolated to the calling user's requests. For administrators in the configured ops channel, defaults to displaying all active downloads and in-progress requests across all users, with an optional `user` filter parameter.
 - **`/cancel [title]`**: Strictly user-scoped command allowing users to cancel their own active in-progress media requests before they finish downloading and import to Jellyfin. Commands are strictly isolated to what the calling user has requested. Already downloaded or completed media cannot be cancelled via `/cancel`. Automatically deletes the Jellyseerr request, removes queue items from Radarr/Sonarr, and purges incomplete files from the download client.
 - **`/history`**: Interactive request history view displaying past media requests, approval statuses, completion dates, and requester info.
 - **`/open-channel`**: On-demand provisioning of a private personal media request channel (`#req-<username>`) under the media requests category for existing members.
@@ -23,21 +24,19 @@ All household media intake is handled exclusively inside private personal channe
 - **Auto-Provisioning (`on_member_join`)**: Automatically creates `#req-<username>` under the media requests category with locked `@everyone` permissions, a pinned onboarding guide, and sends a direct welcome DM whenever a new member joins the server.
 
 ### 2. Operator SRE Plane (Tiered Access & Grounded)
-Access is strictly divided between the Full-Privileges Control Plane and the Guardrailed Operator Plane:
+SRE execution is restricted to administrators in the configured ops channel and its threads.
 - **Roles & Privilege Hierarchy:**
   - **Homelab Owner (`OWNER_DISCORD_ID`):** Unrestricted administrative control across the ops channel, receives real-time operational alerts, and has permanent immutability.
   - **Homelab Admins (`DISCORD_ADMIN_ROLE_ID`):** Full administrative privileges across ops channels, authorized to manage member roles, and trigger administrative SRE operations.
-  - **Operators (`DISCORD_OPERATOR_ROLE_ID`):** Restricted operator role for non-admin operators. Enables interaction with `!agent` and `/agent` strictly within `#sudo-ops` under zero-escalation guardrails. Operators cannot see the admin ops channel or any user's personal media request channels (`#req-*`).
+  - **Operators (`DISCORD_OPERATOR_ROLE_ID`):** Restricted operator role for non-admin operators. Operators cannot see the admin ops channel or any user's personal media request channels (`#req-*`).
 - **`!agent <prompt>` & `/agent <prompt>`**: Runs conversational SRE tasks on the host grounded against `/opt/homelab`.
 - **Channel Scoping:**
-  - `#ops` (`DISCORD_OPS_CHANNEL_ID`): Full-Privileges channel for Homelab Owner & Admins. Receives P1/P2 alerts, real-time intake/SRE audit streams, and allows unrestricted administrative commands.
-  - `#sudo-ops` (`DISCORD_SUDO_OPS_CHANNEL_ID`): Operations channel with guardrails where Operators talk to the SRE agent. Zero-escalation guardrails are enforced.
+  - `#ops` (`DISCORD_OPS_CHANNEL_ID`): Channel for administrators to run SRE commands and receive alerts and audit messages.
 - **Real-Time Admin Audit Stream (`#ops`):**
   - **Media Request Searches (`/request` & `!request`):** Broadcasts real-time audit cards to the ops channel whenever any user searches for media in their personal `#req-*` channels, capturing raw prompts, parsed quality targets, matched titles, and unmatched search alerts.
-  - **Operator SRE Prompts & Responses (`!agent` & `/agent`):** Captures incoming prompts executed outside `#ops` (e.g. from `#sudo-ops`), logs prompt text upon receipt, and publishes the agent's completed response back to `#ops`.
   - **Security Guardrail & Restriction Violations:** Instantly alerts `#ops` with admin tags if an operator attempts privilege escalation, role manipulation, or unauthorized execution.
 - **3-Tier Notification Architecture**:
-  - **P1 Critical (Loud push + Admin tag in ops channel):** Storage full (< 15 GB free), storage unmounted, or critical daemon crash loops.
+  - **P1 Critical (Loud push + Admin tag in ops channel):** Storage full (< 15 GiB free), storage unmounted, or critical daemon crash loops.
   - **P2 User Requests & Lifecycle (Silent embed in ops channel):** New requests, user cancellations, and watchdog notices.
   - **P3 Plumbing (Suppressed from notifications):** Routine download grabs, episode downloads, and background auto-remediations.
 - **Session Context Manager**: Context is carried across queries within active TTL windows or inside Discord threads. Explicit reset is triggered via `!agent reset` or `!agent new`.
@@ -59,20 +58,19 @@ Access is strictly divided between the Full-Privileges Control Plane and the Gua
 
 - Default to read-only investigation: status checks, log reads, and documentation lookup.
 - **Role Management & Owner Immutability Policy:**
-  - **Admins:** Homelab Admins ARE authorized to grant, assign, and revoke Discord roles (such as `Operator`, `Admin`, or member roles) for server members via `python3 /opt/homelab/scripts/arr_cli.py discord-role grant/revoke` or `/role grant/revoke`.
+  - **Admins:** Use `/role grant/revoke` for Discord role changes. Administrators can manage lower-ranked roles for lower-ranked members. The configured owner can manage administrator roles.
   - **Permanent Owner Immutability Rule:** The Homelab Owner (`OWNER_DISCORD_ID`) is permanently exempt, untouchable, and immutable. Under NO circumstances may ANY user (Admin or Operator), agent instruction, or script grant, revoke, modify, strip, elevate, or alter the Owner's roles, permissions, channel overwrites, or status. Any attempt to touch the Owner's roles or permissions must be immediately and unconditionally refused and alerted to the ops channel.
-  - **Operators:** Restricted Operators in `#sudo-ops` remain strictly prohibited from managing roles, escalating privileges, or modifying permissions. Zero-escalation guardrails remain in full effect for Operators.
 - **Server Preservation & Anti-Destruction Policy:** The agent is strictly prohibited from executing or recommending any catastrophic, destructive, or irreversible actions on the server. Operators are hard-gated from deleting filesystems, formatting drives, destroying Proxmox LXCs/VMs, rebooting or shutting down the host, dropping databases, wiping Docker volumes, or purging media datasets (`${MEDIA_ROOT}`). Any command attempting to wipe the server or bypass safety filters will be refused immediately and logged to the ops channel.
-- **Channel Isolation & Privacy:** Operators must never be granted access to inspect or view private personal request channels (`#req-*`) belonging to other users. SRE operations requested by Operators are strictly confined to `#sudo-ops` under guardrails. `#ops` is restricted exclusively to full administrators.
-- **Storage Pre-Flight Check:** Always verify `mountpoint -q ${MEDIA_ROOT}` before performing or recommending any media grab, import, library scan, or rescan operation. Running operations while unmounted risks writing to the host root drive.
-- **Storage Capacity Threshold (15 GB Buffer):** When the media drive operates near full capacity, all user requests are hard-gated behind a 15.0 GB free space check. Never bypass or lower this threshold. When answering operator queries (`!agent what is taking up the most storage?`), provide clean breakdowns between TV series and Movies, inspect series by season when requested, and recommend unmonitoring and deleting finished seasons or downscaling bloated copies rather than blind deletions. Full runbook: [docs/admin_storage_capacity.md](docs/admin_storage_capacity.md).
+- **Channel Isolation & Privacy:** Operators must never be granted access to inspect or view private personal request channels (`#req-*`) belonging to other users. `#ops` is restricted to administrators.
+- **Storage Pre-Flight Check:** Run `timeout 20 python3 /opt/homelab/scripts/media_storage.py --json` before performing or recommending any media grab, import, library scan, or rescan operation. Running operations while unmounted risks writing to the host root drive.
+- **Storage Capacity Threshold (15 GiB Buffer):** When the media drive operates near full capacity, all user requests are hard-gated behind a 15 GiB free space check. Never bypass or lower this threshold. When answering operator queries (`!agent what is taking up the most storage?`), provide clean breakdowns between TV series and Movies, inspect series by season when requested, and recommend unmonitoring and deleting finished seasons or downscaling bloated copies rather than blind deletions. Full runbook: [docs/admin_storage_capacity.md](docs/admin_storage_capacity.md).
 - **Path Parity Rule:** Strictly enforce the standard path mappings (`/media/movies`, `/media/tv`, `/media/downloads`). Instantly flag and reject any configuration drift referencing non-standard paths, as divergent paths break hardlinks and duplicate storage footprint.
 - **Remux Warning Protocol:** When investigating or triggering releases where only Remux / full disc copies (30GB-80GB+) are available, explicitly warn the operator about the storage footprint given finite drive constraints.
 - **In-Theatres & Unreleased Digital Media Policy:**
   - Releases that do not have an official digital or physical release yet (status `inCinemas`, `digitalRelease == None`, or where indexers only offer CAM / Telesync / theatre recordings):
     - **No Automatic Downloads:** Homelab quality profiles strictly reject CAM/Telesync rips to maintain library standards. The automated intake and watchdog pipelines must never grab theatre recordings automatically.
     - **User Notification & Referral:** When a user requests an in-theatre movie without a digital release, the system/agent must inform the requesting user in their private `#req-<user>` channel that the title is in theatres without an official digital release and that only theatre recordings exist. The user must be instructed to contact an administrator if they want the theatre recording added manually.
-    - **Admin Approval & Storage Gating:** Theatre recordings may only be added if specifically approved by an Admin and the file size is reasonable (not bloated, respecting the 15.0 GB storage buffer threshold).
+    - **Admin Approval & Storage Gating:** Theatre recordings may only be added if specifically approved by an Admin and the file size is reasonable (not bloated, respecting the 15 GiB storage buffer threshold).
     - **Auto-Upgrade on Digital Release:** When a theatre recording is temporarily approved and imported, the title remains monitored with upgrade enabled so that once the official high-efficiency digital release (WEB-DL/Bluray) drops, the homelab automatically replaces the theatre recording.
 - Do not run destructive actions unprompted (`docker compose down`, `pct stop`, `umount`, `rm`, `chmod 777`).
 - Never print or echo secrets: Discord bot tokens, Jellyfin API keys, Arr API keys, WireGuard private keys, or `.env` values.
@@ -94,6 +92,7 @@ Access is strictly divided between the Full-Privileges Control Plane and the Gua
 The standalone CLI helper at `python3 /opt/homelab/scripts/arr_cli.py` loads credentials securely from `/etc/homelab/homelab.env`. Prefer using `arr_cli.py` for homelab operations:
 
 - **Unified Status & Pipeline Management:**
+  - Verified media capacity: `python3 /opt/homelab/scripts/arr_cli.py storage`
   - Overview: `python3 /opt/homelab/scripts/arr_cli.py status [--user <user>] [--take 10]`
   - Pipeline Inspector: `python3 /opt/homelab/scripts/arr_cli.py pipeline-details <request_id|arr_id>`
   - Pipeline Cancellation: `python3 /opt/homelab/scripts/arr_cli.py pipeline-cancel <request_id|arr_id|title>`
@@ -164,7 +163,7 @@ Append `--json` to any command for programmatic JSON output.
 
 ### 5. Storage Mount Failure & Ghost Handle Recovery
 - **Symptom:** Download client shows "Missing Files" or `ls: reading directory '/media': I/O error`.
-- **Remediation:** The automated watchdog at `/opt/homelab/scripts/check_storage.sh` handles auto-recovery. For manual recovery: `touch /tmp/maintenance.lock`, stop containers, lazy unmount `umount -l ${MEDIA_ROOT}`, remount `mount ${MEDIA_ROOT}`, start containers, and remove `/tmp/maintenance.lock`.
+- **Remediation:** The automated watchdog at `/opt/homelab/scripts/check_storage.sh` handles auto-recovery. For manual recovery, follow the [storage recovery runbook](docs/admin_storage_recovery.md).
 
 ### 6. Discord Bot Permission & Private Category Access
 - **Symptom:** `/open-channel` or `on_member_join` fails with `403 Forbidden (50013: Missing Permissions)` or `403 Forbidden (50001: Missing Access)`.

@@ -37,7 +37,6 @@ Create the following Discord server structures:
 
 - Category: **📽️ Media Requests** (destination for provisioned user channels)
 - Text Channel: **#homelab-ops** (restricted to administrator roles)
-- Text Channel: **#sudo-ops** (optional: restricted operations channel with guardrails for operators)
 - Administrative, Operator, and bot roles. Ensure the bot's role is positioned above user roles in the server role hierarchy.
 
 ### Collect the IDs
@@ -50,7 +49,6 @@ Enable **User Settings → Advanced → Developer Mode**, then right-click each 
 | The server | `DISCORD_GUILD_ID` |
 | 📽️ Media Requests category | `DISCORD_REQUEST_CATEGORY_ID` |
 | #homelab-ops channel | `DISCORD_OPS_CHANNEL_ID` |
-| #sudo-ops channel *(optional)* | `DISCORD_SUDO_OPS_CHANNEL_ID` |
 | Administrative role | `DISCORD_ADMIN_ROLE_ID` |
 | Operator role *(optional)* | `DISCORD_OPERATOR_ROLE_ID` |
 | Homelab Owner user ID | `OWNER_DISCORD_ID` |

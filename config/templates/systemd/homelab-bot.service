@@ -15,6 +15,7 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=/etc/homelab/homelab.env
 WorkingDirectory=/opt/homelab
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/homelab/.venv/bin/python /opt/homelab/scripts/discord_bridge.py
 Restart=on-failure
 RestartSec=10

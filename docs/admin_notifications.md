@@ -7,7 +7,7 @@ The stack pushes alerts via [ntfy](https://ntfy.sh), an HTTP-based publish-subsc
 ```mermaid
 flowchart TD
     subgraph SRE_Plane["Notification Architecture"]
-        CRIT["P1: Critical Outage / Blocker\n• Storage full (< 15 GB free)\n• Media mount dropped\n• VPN tunnel dead"] -->|Loud Ping + Push Notification| OP1["#ops channel (Loud Alert)"]
+        CRIT["P1: Critical Outage / Blocker\n• Storage full (< 15 GiB free)\n• Media mount dropped\n• VPN tunnel dead"] -->|Loud Ping + Push Notification| OP1["#ops channel (Loud Alert)"]
         REQ["P2: User Requests & Milestones\n• New request submitted\n• Full season/movie imported\n• Request cancelled"] -->|Silent Embed • No @ mention| OP2["#ops channel (Silent Embed)"]
         GRAB["P3: Plumbing / Routine\n• Routine download started\n• Release retries\n• Auto-remediations"] -->|Quiet Logs / arr_cli| OP3["arr_cli.py & /status only"]
     end
@@ -21,7 +21,7 @@ flowchart TD
 
 | Tier | Events | Destination | Mentions / Push | Format |
 |---|---|---|---|---|
-| **P1: Critical Outage / Blocker** | • Host media storage unmounted (`${MEDIA_ROOT}`)<br>• Storage full (< 15 GB free)<br>• VPN tunnel dead<br>• Arr service crash loop | Ops channel + ntfy (High Priority) | **Tags Administrator** + Loud Mobile Push | Actionable alert embed (`🚨 Storage Capacity Alert`) with user, media, remaining headroom, and remediation steps |
+| **P1: Critical Outage / Blocker** | • Host media storage unmounted (`${MEDIA_ROOT}`)<br>• Storage full (< 15 GiB free)<br>• VPN tunnel dead<br>• Arr service crash loop | Ops channel + ntfy (High Priority) | **Tags Administrator** + Loud Mobile Push | Storage verification or capacity alert with the failure reason |
 | **P2: User Requests & Lifecycle** | • New Jellyseerr request submitted<br>• User cancellation<br>• Watchdog notice (no sources found)<br>• Season / Movie fully imported | Ops channel (Silent) + ntfy (Low Priority) | **No `@` tag** (Silent Embed) | Compact summary embed with requesting user, title, size, and pipeline status |
 | **P3: Ephemeral Plumbing & Background Jobs** | • Routine download started<br>• Queue auto-remediations (stalled items swapped)<br>• Prowlarr indexer backoff auto-resets | Logged only (or debounced single summary) | **Zero pings / No ntfy** | Tracked via `/status` and `arr_cli.py queue` |
 
@@ -31,7 +31,7 @@ flowchart TD
 
 Users receive only actionable lifecycle milestones:
 1. **Intake Confirmation:** Immediate embed when they hit `/request` with estimated size and ETA.
-2. **Storage Full Notice (Pre-Flight Gate):** If free space on `${MEDIA_ROOT}` is below 15 GB, the request confirmation view displays an orange notice explaining that storage is temporarily full and directs the user to contact the administrator to free up space.
+2. **Storage notice:** If the configured filesystem fails verification or has less than 15 GiB free, confirmation stops and directs the requester to an administrator.
 3. **Watchdog Search Notice (Fallback):** If the autonomous watchdog detects a stalled release and finds that all available indexer releases have 0 sources, the user receives a private notice in their personal request channel:
    > ⚠️ **Download Notice: [Title]**  
    > Our automated watchdog checked all indexers, but could not find an active release with available sources. The system will keep monitoring in case a fresh copy becomes available.
@@ -46,7 +46,7 @@ Users receive only actionable lifecycle milestones:
   - `ntfy_event_listener_loop` debounces bursts of notifications (e.g. multi-episode season packs) within a 25-second window so only a single summary card is posted.
   - Routine requests and cancellations post silent rich embeds without `@operator` pings.
 - **Critical Alerts:**
-  - Storage full (< 15 GB free) and drive unmount events trigger loud alerts with operator mentions.
+  - Storage full (< 15 GiB free) and drive unmount events trigger loud alerts with operator mentions.
 
 ---
 

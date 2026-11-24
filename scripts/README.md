@@ -74,7 +74,7 @@ Append `--json` to any command for machine-readable output.
 Provides two isolated interfaces:
 
 - **Household plane** — Members interact via private `#req-<username>` channels or DMs. Commands include `/request` (catalogue search, size estimation, storage pre-flight gate, download confirmation), `/status` (real-time progress, request timestamps, details view), `/cancel` (user-scoped cancellation of active downloads), `/history` (request log), and `/open-channel`.
-- **Operator plane** — Tiered operations channels (`#ops` for admins, `#sudo-ops` with guardrails for operators). Runs `!agent` or `/agent` to invoke an SRE coding-agent CLI grounded on this repository. Execution is serialized with secret scrubbing, typing heartbeats, and anti-destruction safety filters. Admins can also manage roles via `/role grant/revoke/list`.
+- **Operator plane** — Administrators can run `!agent` or `/agent` from the configured ops channel or its threads. Execution is serialized with secret scrubbing and typing heartbeats. Admins can also manage roles via `/role grant/revoke/list`.
 
 The agent CLI is configurable via `AGENT_CLI_BIN` and `AGENT_CLI_ARGS` to support any non-interactive agent executable.
 
@@ -95,7 +95,7 @@ Run directly via `python3 scripts/sync_subtitles.py [--dry-run]` or via `python3
 
 ## `check_storage.sh` — storage watchdog
 
-Monitors the external media mount point. If the mount disconnects, the script stops dependent containers, cycles the filesystem mount, restarts containers, and triggers a Jellyfin library rescan.
+Uses `media_storage.py` to verify the expected ext4 filesystem and durable access. The watchdog stops dependent containers if verification fails and starts only previously running containers after verified recovery. The `media-storage-hook.sh` pre-start hook independently gates container startup.
 
 This prevents running download clients from writing into an unmounted mount point on the host root filesystem. A 15-second systemd timer executes the check.
 

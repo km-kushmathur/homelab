@@ -18,11 +18,14 @@ import io
 import time
 import json
 import zipfile
+from pathlib import Path
+from uuid import uuid4
 import urllib.request
 import urllib.parse
 import urllib.error
-import subprocess
 from typing import Dict, List, Optional, Tuple, Any
+
+from media_storage import DIRECTORY_FLAGS, StorageUnavailable, require_media_storage
 
 DEFAULT_ENV_FILE = "/etc/homelab/homelab.env"
 
@@ -56,18 +59,8 @@ BAZARR_URL = os.environ.get("BAZARR_URL", "http://192.168.1.14:6767").rstrip("/"
 BAZARR_API_KEY = os.environ.get("BAZARR_API_KEY", "")
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.14:8191/v1")
 
-MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/mnt/media")
 PUID = int(os.environ.get("PUID", "1000"))
 PGID = int(os.environ.get("PGID", "1000"))
-
-
-def verify_storage_mount() -> bool:
-    """Verifies media drive is mounted."""
-    try:
-        ret = subprocess.run(["mountpoint", "-q", MEDIA_ROOT])
-        return ret.returncode == 0
-    except FileNotFoundError:
-        return os.path.exists(MEDIA_ROOT)
 
 
 def fetch_jellyfin_items() -> List[Dict[str, Any]]:
@@ -113,16 +106,31 @@ def get_srt_path(video_path: str) -> str:
     return f"{base}.en.srt"
 
 
-def _set_file_permissions(dest_path: str) -> None:
-    """Safely applies permissions and ownership."""
+def write_subtitle(dest_path: str, content: bytes) -> None:
+    storage = require_media_storage()
+    mount = Path(storage["mountpoint"])
+    dest = Path(dest_path)
+    parent = dest.parent.resolve()
+    if not parent.is_relative_to(mount):
+        raise StorageUnavailable("Subtitle destination is outside the verified media filesystem")
+    directory = os.open(parent, DIRECTORY_FLAGS)
     try:
-        os.chmod(dest_path, 0o664)
-    except Exception:
-        pass
-    try:
-        os.chown(dest_path, PUID, PGID)
-    except Exception:
-        pass
+        device = os.fstat(directory).st_dev
+        if f"{os.major(device)}:{os.minor(device)}" != storage["device"]:
+            raise StorageUnavailable("Media filesystem changed before the subtitle write")
+        temp = f".subtitle-{uuid4().hex}"
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o664, dir_fd=directory)
+        try:
+            with os.fdopen(fd, "wb") as output:
+                output.write(content)
+                os.fchown(output.fileno(), PUID, PGID)
+                os.fchmod(output.fileno(), 0o664)
+            os.replace(temp, dest.name, src_dir_fd=directory, dst_dir_fd=directory)
+        except BaseException:
+            os.unlink(temp, dir_fd=directory)
+            raise
+    finally:
+        os.close(directory)
 
 
 def download_tv_subtitle_gestdown(show_tvdb_id: str, season: int, episode: int, dest_path: str) -> bool:
@@ -157,10 +165,10 @@ def download_tv_subtitle_gestdown(show_tvdb_id: str, season: int, episode: int, 
         with urllib.request.urlopen(req_dl, timeout=20) as resp:
             content = resp.read()
             if content and len(content) > 100:
-                with open(dest_path, "wb") as f:
-                    f.write(content)
-                _set_file_permissions(dest_path)
+                write_subtitle(dest_path, content)
                 return True
+    except StorageUnavailable:
+        raise
     except Exception as e:
         sys.stderr.write(f"Gestdown error for TVDB {show_tvdb_id} S{season:02d}E{episode:02d}: {e}\n")
     return False
@@ -200,10 +208,10 @@ def download_movie_subtitle_yify(imdb_id: str, dest_path: str) -> bool:
                 if name.lower().endswith(".srt"):
                     content = zf.read(name)
                     if content and len(content) > 100:
-                        with open(dest_path, "wb") as f:
-                            f.write(content)
-                        _set_file_permissions(dest_path)
+                        write_subtitle(dest_path, content)
                         return True
+    except StorageUnavailable:
+        raise
     except Exception as e:
         sys.stderr.write(f"YIFY error for IMDb {imdb_id}: {e}\n")
     return False
@@ -268,10 +276,10 @@ def download_movie_subtitle_subdl(query: str, dest_path: str) -> bool:
                 if name.lower().endswith(".srt"):
                     content = zf.read(name)
                     if content and len(content) > 100:
-                        with open(dest_path, "wb") as f:
-                            f.write(content)
-                        _set_file_permissions(dest_path)
+                        write_subtitle(dest_path, content)
                         return True
+    except StorageUnavailable:
+        raise
     except Exception as e:
         sys.stderr.write(f"SubDL error for query '{query}': {e}\n")
     return False
@@ -307,8 +315,7 @@ def trigger_bazarr_tasks() -> None:
 
 def sync_all_subtitles(dry_run: bool = False) -> Dict[str, Any]:
     """Orchestrates subtitle synchronization across all media."""
-    if not verify_storage_mount():
-        raise RuntimeError(f"Pre-flight failure: {MEDIA_ROOT} is not mounted!")
+    require_media_storage()
 
     items = fetch_jellyfin_items()
     series_map = fetch_jellyfin_series()
@@ -371,9 +378,11 @@ def sync_all_subtitles(dry_run: bool = False) -> Dict[str, Any]:
 
         time.sleep(0.1)
 
-    print("\nTriggering Jellyfin library refresh...")
-    refresh_jellyfin()
-    trigger_bazarr_tasks()
+    if not dry_run:
+        require_media_storage()
+        print("\nTriggering Jellyfin library refresh...")
+        refresh_jellyfin()
+        trigger_bazarr_tasks()
 
     return {
         "total_items": total_items,
@@ -392,6 +401,9 @@ if __name__ == "__main__":
         print("Synchronizes and fetches missing English subtitles for Jellyfin media library.")
         sys.exit(0)
     dry_run = "--dry-run" in sys.argv
-    res = sync_all_subtitles(dry_run=dry_run)
+    try:
+        res = sync_all_subtitles(dry_run=dry_run)
+    except StorageUnavailable as exc:
+        sys.exit(str(exc))
     print("\n=== Subtitle Sync Summary ===")
     print(json.dumps(res, indent=2))

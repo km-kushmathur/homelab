@@ -7,7 +7,7 @@ Guide for requesting media via Discord or the Jellyseerr web interface.
 ## Discord Requests
 
 1. **Request channel:** Navigate to `#req-<username>`. If the channel is not present, execute `/open-channel` in any channel to create it.
-2. **Search and request:**
+2. **Search and request one title at a time.**
    ```text
    /request <title> [quality]
    ```
@@ -50,6 +50,6 @@ Open the web portal at `http://192.168.1.14:5055`:
 
 ## Operational Notes
 
-- Verify progress with `/status` before re-requesting media.
+- Use `/storage` to check available space and `/status` to check request progress.
 - Large releases and full TV seasons require extended download times depending on available sources.
 - For stalled items, note the title and requested quality profile when contacting the system administrator.

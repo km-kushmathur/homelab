@@ -123,6 +123,23 @@ Unprivileged LXC containers map UID `1000` to host UID `101000` (via `+100000` o
 
 ---
 
+## Record the storage identity
+
+Clone the repository to `/opt/homelab`. Run the following on the Proxmox host using the UUID of the filesystem you selected above. It must match the UUID in `/etc/fstab`.
+
+```bash
+install -d -m 0750 /etc/homelab
+findmnt -n -M /mnt/media -o TARGET,UUID,FSTYPE,OPTIONS
+```
+
+Copy the [storage identity example](../../config/examples/pve/media-storage.json.example) to `/etc/homelab/media-storage.json` and replace the example UUID. After verifying the mounted device and UUID, write the same UUID to the marker on that filesystem.
+
+```bash
+mountpoint -q /mnt/media && [ "$(findmnt -n -M /mnt/media -o UUID)" = "$UUID" ] && \
+  printf '%s\n' "$UUID" > /mnt/media/.homelab-media-identity
+timeout 20 python3 /opt/homelab/scripts/media_storage.py --json
+```
+
 ## Verification
 
 ```bash
